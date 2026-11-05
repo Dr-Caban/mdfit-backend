@@ -47,6 +47,8 @@ function loadConfig() {
     resendUrl: env("RESEND_URL", "https://api.resend.com"),
     notifyFrom: env("NOTIFY_FROM"),
     notifyEmail: env("NOTIFY_EMAIL").toLowerCase(),
+    // Extra addresses that get every owner alert too (feedback, bookings, group-message reports), comma separated
+    alertEmails: env("ALERT_EMAILS").toLowerCase().split(/[\s,;]+/).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)),
     calKey: env("CAL_API_KEY"),
     calUrl: env("CAL_API_URL", "https://api.cal.com/v2"),
     calWebhookSecret: env("CAL_WEBHOOK_SECRET"),
@@ -116,7 +118,17 @@ function toCsv(rows, cols) {
 
 function createApp(cfg = loadConfig()) {
   const store = createStore(cfg.dataDir, { key: cfg.dataKey });
-  const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, apiUrl: cfg.resendUrl });
+  // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
+  const EMAIL_LOG_DAYS = 60, EMAIL_LOG_FAILS = 50;
+  function logEmail(r) {
+    const d = store.read("email-log", { days: {}, failures: [] });
+    const day = nowParts(cfg.tz, new Date()).date, row = d.days[day] || { sent: 0, failed: 0 };
+    if (r.ok) row.sent += r.count; else { row.failed += r.count; d.failures = [{ at: new Date().toISOString(), to: r.to, subject: r.subject, error: r.error }, ...d.failures].slice(0, EMAIL_LOG_FAILS); }
+    d.days[day] = row;
+    d.days = Object.fromEntries(Object.entries(d.days).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, EMAIL_LOG_DAYS));
+    store.write("email-log", d);
+  }
+  const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, alertEmails: cfg.alertEmails || [], apiUrl: cfg.resendUrl, onResult: logEmail });
   const cal = createCal({ apiKey: cfg.calKey, apiUrl: cfg.calUrl });
   const places = createPlaces({ apiKey: cfg.googleKey, baseUrl: cfg.googleUrl, legacyUrl: cfg.googleLegacyUrl });
 
@@ -1021,6 +1033,11 @@ function createApp(cfg = loadConfig()) {
   mountIntake({ app, admin, store, cfg, notify, activity, limiter, appointments, tokenMatches, prettyDate, prettyTime });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   mountAnalytics({ app, admin, store, limiter });
+  // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
+  admin.get("/email-log", (req, res) => {
+    const d = store.read("email-log", { days: {}, failures: [] });
+    res.json({ enabled: notify.enabled, alertsTo: notify.owners.map(mask), days: Object.entries(d.days).map(([date, v]) => ({ date, ...v })).slice(0, 30), failures: d.failures.slice(0, 20) });
+  });
   mountVideos({ app, admin, store, cfg, logger: typeof logger !== "undefined" ? logger : null });
   mountSearch({ app, admin, store, limiter, logger: typeof logger !== "undefined" ? logger : null });
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });

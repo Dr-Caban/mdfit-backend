@@ -31,7 +31,7 @@ async function fakeResend({ perSec = 2, failFirst = 0 } = {}) {
         return res.end('{"message":"Too many requests"}');
       }
       const parsed = JSON.parse(body);
-      (Array.isArray(parsed) ? parsed : [parsed]).forEach((m) => emails.push({ path: req.url, to: m.to[0], subject: m.subject }));
+      (Array.isArray(parsed) ? parsed : [parsed]).forEach((m) => emails.push({ path: req.url, to: m.to[0], all: m.to, subject: m.subject, text: m.text }));
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"id":"x"}');
     });
@@ -71,7 +71,7 @@ test("group message: every notice is emailed despite the rate limit; reminders g
   const f = await fakeResend({ perSec: 2 }); t.after(f.close);
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-n-"));
   const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"],
-    tz: "America/New_York", now: () => new Date("2026-11-02T10:00:00Z"), siteUrl: "https://mdfit.example.com", resendKey: "k", notifyFrom: "x@example.com", notifyEmail: "owner@example.com", resendUrl: f.url });
+    tz: "America/New_York", now: () => new Date("2026-11-02T10:00:00Z"), siteUrl: "https://mdfit.example.com", resendKey: "k", notifyFrom: "x@example.com", notifyEmail: "owner@example.com", alertEmails: ["alerts@example.com"], resendUrl: f.url });
   const server = app.listen(0); await new Promise((r) => server.once("listening", r));
   t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -86,6 +86,18 @@ test("group message: every notice is emailed despite the rate limit; reminders g
   const [g] = await waitIdle();
   assert.equal(g.recipients, 9); assert.equal(g.emailed, 9, "all 9 notices accepted"); assert.equal(g.read, 0);
   assert.equal(f.emails.filter((e) => e.subject === "New message from Dr. Jared").length, 9);
+  // the owner (and the extra alert address) get a report once the notices are out
+  for (let i = 0; i < 50 && !f.emails.some((e) => e.subject.startsWith("Group message sent")); i++) await new Promise((r) => setTimeout(r, 100));
+  const rep = f.emails.find((e) => e.subject.startsWith("Group message sent"));
+  assert.equal(rep.subject, "Group message sent to 9 people");
+  assert.deepEqual(rep.all, ["owner@example.com", "alerts@example.com"]);
+  assert.match(rep.text, /Email notices: 9 sent\./); assert.match(rep.text, /Clinic closed Thanksgiving\./);
+  // every owner alert (here: the 9 new-account alerts) went to both addresses
+  assert.ok(f.emails.filter((e) => e.subject.startsWith("New client account")).every((e) => e.all.includes("alerts@example.com")));
+  // Admin → Analytics email delivery log
+  const log = (await call("GET", "/api/admin/email-log", undefined, adm)).body;
+  assert.equal(log.enabled, true); assert.equal(log.alertsTo.length, 2);
+  assert.ok(log.days[0].sent >= 9 + 9 + 1, "notices + account alerts + report counted"); assert.equal(log.days[0].failed, 0);
   // 4 people open the app and read it; the reminder goes to the other 5 only
   for (const tok of toks.slice(0, 4)) await call("POST", "/api/me/messages/read", {}, tok);
   const rm = await call("POST", `/api/admin/messages/broadcast/${g.broadcastId}/remind`, {}, adm);
@@ -96,4 +108,14 @@ test("group message: every notice is emailed despite the rate limit; reminders g
   // the per-client thread route still works next to /messages/broadcasts
   const one = (await call("GET", "/api/me", undefined, toks[0])).body.client.id;
   assert.equal((await call("GET", `/api/admin/messages/${one}`, undefined, adm)).status, 200);
+});
+
+test("notifier: a rejected address isn't retried and is reported for the admin's delivery log", async (t) => {
+  const server = http.createServer((req, res) => { res.writeHead(422, { "content-type": "application/json" }); res.end('{"message":"Invalid to"}'); });
+  server.listen(0); await new Promise((r) => server.once("listening", r)); t.after(() => server.close());
+  const results = [];
+  const n = createNotifier({ apiKey: "k", from: "x@example.com", ownerEmail: "o@example.com", alertEmails: ["a@example.com", "O@example.com"], apiUrl: `http://127.0.0.1:${server.address().port}`, minGapMs: 0, onResult: (r) => results.push(r) });
+  assert.deepEqual(n.owners, ["o@example.com", "a@example.com"], "alert addresses added, duplicates dropped");
+  assert.equal(await n.client("bad@", "Hi", "x"), false);
+  assert.equal(results.length, 1); assert.equal(results[0].ok, false); assert.equal(results[0].error, "HTTP 422");
 });
