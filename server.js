@@ -432,8 +432,8 @@ function createApp(cfg = loadConfig()) {
   const formLimit = limiter(20, 60 * 60 * 1000);
   const loginFails = limiter(10, 15 * 60 * 1000);
 
-  // Bots fill the hidden "company" field; pretend success and drop it.
-  const honeypot = (req, res, next) => (req.body && req.body.company ? res.status(201).json({ ok: true }) : next());
+  // Bots fill the hidden "mdfit_hp" field (formerly "company", which browsers autofilled for real people); pretend success and drop it.
+  const honeypot = (req, res, next) => (req.body && (req.body.mdfit_hp || req.body.company) ? res.status(201).json({ ok: true }) : next());
 
   // ---- Auth: "Authorization: Bearer <token>" from /api/admin/login
   const NOT_SET_UP = "Admin login isn't set up on the server (ADMIN_EMAIL, ADMIN_PASSWORD_HASH, SESSION_SECRET).";
@@ -620,6 +620,10 @@ function createApp(cfg = loadConfig()) {
     const appt = list.find((x) => x.id === req.params.id);
     if (!appt || !tokenMatches(req.body && req.body.token, appt.cancelToken) || appt.status === "cancelled")
       return res.status(404).json({ error: "Appointment not found or already cancelled." });
+    // Only upcoming bookings can be cancelled online: an old email link must not turn a completed visit or a no-show into "cancelled"
+    const now = nowParts(cfg.tz, cfg.now());
+    if (appt.status !== "booked" || `${appt.date} ${appt.time}` <= `${now.date} ${now.time}`)
+      return res.status(409).json({ error: "This visit has already happened, so it can't be cancelled online. Questions? Call 941-313-0562." });
     appt.status = "cancelled";
     appt.cancelledAt = new Date().toISOString();
     store.write("appointments", list);
@@ -770,7 +774,7 @@ function createApp(cfg = loadConfig()) {
     res.json({ enabled: true });
   });
   admin.post("/mfa/disable", (req, res) => {
-    if (!verifyPassword(String((req.body && req.body.password) || ""), cfg.adminPasswordHash)) return res.status(401).json({ error: "Password is wrong." });
+    if (!verifyPassword(String((req.body && req.body.password) || ""), cfg.adminPasswordHash)) return res.status(403).json({ error: "Password is wrong." }); // 403, not 401: a typo must not log the admin out
     store.write("admin-mfa", { enabled: false });
     res.json({ enabled: false });
   });;
@@ -1011,6 +1015,7 @@ function createApp(cfg = loadConfig()) {
   admin.get("/activity", (req, res) => res.json(store.read("activity", []).slice(0, 200)));
 
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
+  app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
   mountIntake({ app, admin, store, cfg, notify, activity, limiter, appointments, tokenMatches, prettyDate, prettyTime });
@@ -1041,7 +1046,7 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   const app = createApp(cfg);
   const server = http.createServer(app);
-  const rt = createRealtime(server, cfg);
+  const rt = createRealtime(server, cfg, { findClient: app.get("findClient") });
   app.set("rt", rt);
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }

@@ -263,10 +263,31 @@ test("workout performance numbers, later edits and daily vitals", async (t) => {
   assert.deepEqual(v.body.map((x) => [x.date, x.restingHr, x.hrv, x.vo2max]), [["2026-10-01", 58, 55, 42]], "same day merges");
 });
 
+test("settings: appointment types keep the telehealth flag through a save", async (t) => {
+  const s = await start(); t.after(s.close);
+  const adm = await s.adminToken();
+  const types = (await s.call("GET", "/api/admin/settings", undefined, adm)).body.appointmentTypes;
+  const flipped = types.map((x) => (x.remote ? (({ remote, ...y }) => y)(x) : { ...x, remote: true }));
+  assert.equal((await s.call("PUT", "/api/admin/settings", { appointmentTypes: flipped }, adm)).status, 200);
+  const saved = (await s.call("GET", "/api/admin/settings", undefined, adm)).body.appointmentTypes;
+  assert.deepEqual(saved.map((x) => !!x.remote), types.map((x) => !x.remote), "remote is stored exactly as sent");
+});
+
+test("content editor: saving the built-in content back unchanged succeeds and loses nothing", async (t) => {
+  // The admin Content tab sends every program, lecture, tier, recommendation and event back on each save.
+  const s = await start(); t.after(s.close);
+  const adm = await s.adminToken();
+  const before = (await s.call("GET", "/api/admin/content", undefined, adm)).body;
+  const pick = (c) => ({ programs: c.programs, lectures: c.lectures, tiers: c.tiers, recommendations: c.recommendations, events: c.events });
+  const r = await s.call("PUT", "/api/admin/content", pick(before), adm);
+  assert.equal(r.status, 200, "save failed: " + (r.body && r.body.error));
+  assert.deepEqual(pick(r.body), pick(before), "a round-trip save keeps every field (exercise lists, rest times, images, sport)");
+});
+
 test("member content: locked links, membership requests, admin grants tiers, monthly 1-on-1 allowance", async (t) => {
   const s = await start(); t.after(s.close);
   const pub = (await s.call("GET", "/api/content")).body;
-  assert.ok(pub.programs.length >= 5 && pub.recommendations.some((r) => r.id === "pillow-progression"));
+  assert.ok(pub.programs.length >= 5 && pub.recommendations.some((r) => r.id === "weekly-tracking"));
   assert.equal(pub.programs.find((p) => p.id === "hypertrophy-12").locked, false, "all content ungated");
   assert.equal(pub.programs.find((p) => p.id === "low-back-6").locked, false);
   const adm = await s.adminToken();
@@ -459,7 +480,7 @@ test("stripe: membership + protocol checkout, verified webhooks drive access, id
   assert.deepEqual(sess.discounts, [{ coupon: "mdfit-review-30" }]);
   assert.equal(sess.payment_method_types, undefined, "dynamic payment methods");
   assert.match(sess.integration_identifier, /^mdfit_membership_[a-z]{8}$/);
-  assert.equal(calls.find((c) => c[0] === "price")[1].unit_amount, 34900);
+  assert.equal(calls.find((c) => c[0] === "price")[1].unit_amount, 20000); // Premium 1-on-1 is $200/month
   // bad signature rejected
   const bad = await fetch(s.base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": "t=1,v1=bad" }, body: "{}" });
   assert.equal(bad.status, 400); await bad.text();

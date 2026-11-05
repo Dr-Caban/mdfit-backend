@@ -242,6 +242,8 @@ test("appointments: availability, notice window, overlap, cancel, admin status",
 
   const upd = await s.call("PATCH", `/api/admin/appointments/${list[0].id}`, { status: "completed", adminNotes: "Left knee, VMO weak" });
   assert.equal(upd.body.status, "completed");
+  // an old email cancel link can't turn a completed (or no-show) visit into "cancelled"
+  assert.equal((await s.call("POST", `/api/appointments/${call.body.appointment.id}/cancel`, { token: call.body.appointment.cancelToken })).status, 409);
   assert.equal((await s.call("PATCH", `/api/admin/appointments/${list[0].id}`, { status: "maybe" })).status, 400);
   assert.equal((await s.call("GET", "/api/admin/appointments?all=1")).body.length, 3);
   const pat = (await s.call("GET", "/api/admin/appointments?all=1")).body.find((x) => x.email === "pat@example.com");
