@@ -379,6 +379,53 @@ test("messaging: open to all, encrypted at rest, unread tracking both ways", asy
   assert.equal((await s.call("GET", "/api/me/messages/unread-count", undefined, tok)).body.unread, 0);
 });
 
+test("broadcast: everyone, members, one tier, or picked people; lands in each private thread", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = (await signup(s)).body.token;
+  const b = (await signup(s, { name: "Sam Roe", email: "sam@example.com" })).body.token;
+  const c = (await signup(s, { name: "Lee Poe", email: "lee@example.com" })).body.token;
+  const adm = await s.adminToken();
+  const idOf = async (tok) => (await s.call("GET", "/api/me", undefined, tok)).body.client.id;
+  const [ia, ib, ic] = [await idOf(a), await idOf(b), await idOf(c)];
+  await s.call("PUT", `/api/admin/clients/${ia}/membership`, { tier: "premium" }, adm);
+  await s.call("PUT", `/api/admin/clients/${ib}/membership`, { tier: "member" }, adm);
+  const send = (body) => s.call("POST", "/api/admin/messages/broadcast", body, adm);
+  const unread = async (tok) => (await s.call("GET", "/api/me/messages/unread-count", undefined, tok)).body.unread;
+
+  // admin only, and bad input is refused
+  assert.equal((await s.call("POST", "/api/admin/messages/broadcast", { to: "all", body: "hi" }, a)).status, 401);
+  assert.equal((await send({ to: "all", body: "  " })).status, 400);
+  assert.equal((await send({ to: "nobody", body: "hi" })).status, 400);
+  assert.equal((await send({ to: "tier", body: "hi" })).status, 400);
+  assert.equal((await send({ to: "selected", clientIds: [], body: "hi" })).status, 400);
+  assert.equal((await send({ to: "tier", tier: "no-such-tier", body: "hi" })).status, 400, "an empty audience is refused");
+
+  let r = await send({ to: "all", body: "Clinic closed Thanksgiving Day." });
+  assert.equal(r.status, 201); assert.equal(r.body.sent, 3);
+  assert.deepEqual([await unread(a), await unread(b), await unread(c)], [1, 1, 1]);
+
+  r = await send({ to: "members", body: "Members: new program is up." });
+  assert.equal(r.body.sent, 2);
+  assert.deepEqual([await unread(a), await unread(b), await unread(c)], [2, 2, 1]);
+
+  r = await send({ to: "tier", tier: "premium", body: "Premium Q&A Friday." });
+  assert.equal(r.body.sent, 1);
+  r = await send({ to: "selected", clientIds: [ic, ic, "nope"], body: "Lee, checking in." });
+  assert.equal(r.body.sent, 1, "duplicates and unknown ids are ignored");
+  assert.deepEqual([await unread(a), await unread(b), await unread(c)], [3, 2, 2]);
+
+  // stored encrypted, shows in each person's own thread, and they can reply as usual
+  const raw = require("fs").readFileSync(require("path").join(s.dataDir, "messages.json"), "utf8");
+  assert.ok(!raw.includes("Thanksgiving"), "broadcast bodies are encrypted at rest");
+  const mine = (await s.call("GET", "/api/me/messages", undefined, c)).body.messages.map((m) => m.body);
+  assert.deepEqual(mine, ["Clinic closed Thanksgiving Day.", "Lee, checking in."]);
+  assert.equal((await s.call("POST", "/api/me/messages", { body: "Thanks!" }, c)).status, 201);
+  const th = (await s.call("GET", "/api/admin/messages", undefined, adm)).body;
+  assert.equal(th.threads.length, 3); assert.equal(th.unread, 1);
+  // a client literally named "broadcast" can't exist, but make sure the per-client route still works
+  assert.equal((await s.call("POST", `/api/admin/messages/${ia}`, { body: "1:1 still works" }, adm)).status, 201);
+});
+
 test("stripe: membership + protocol checkout, verified webhooks drive access, idempotent", async (t) => {
   const Stripe = require("stripe");
   const real = new Stripe("sk_test_fake", { apiVersion: "2026-10-28.endive" });
