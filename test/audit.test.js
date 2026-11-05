@@ -82,7 +82,7 @@ test("admin two-step login by email code: on/off, single-use, expires, 5 tries, 
   const call = async (m, u, b, tok) => { const r = await fetch(base() + u, { method: m, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: b && JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => undefined) }; };
   const login = (code) => call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123", ...(code ? { code } : {}) });
   const lastCode = () => { const m = mails[mails.length - 1]; return m.subject.match(/^(\d{6})/)[1]; };
-  const settle = () => new Promise((r) => setTimeout(r, 80));
+  const settle = () => new Promise((r) => setTimeout(r, 750)); // emails are paced ~0.6 s apart to stay under the provider's rate limit
   const tok = (await login()).body.token;
   assert.ok(tok, "password-only while off");
   // turn on: a code is emailed, confirming it switches two-step on

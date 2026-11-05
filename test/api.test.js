@@ -290,7 +290,7 @@ test("email notifications go to owner and client when configured", async (t) => 
   }); t.after(s.close);
   await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "09:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", areas: ["Shoulder"], painLevel: 3 });
   await s.call("POST", "/api/leads", { name: "Sam Lee", email: "sam@example.com", areas: ["Neck"], painLevel: 4 });
-  for (let i = 0; i < 50 && sent.length < 3; i++) await new Promise((r) => setTimeout(r, 20));
+  for (let i = 0; i < 250 && sent.length < 3; i++) await new Promise((r) => setTimeout(r, 20)); // emails are paced ~0.6 s apart
   assert.equal(sent.length, 3);
   assert.equal(sent[0].auth, "Bearer re_test");
   const owner = sent.filter((m) => m.to[0] === "owner@example.com");
