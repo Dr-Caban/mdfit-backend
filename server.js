@@ -623,7 +623,7 @@ function createApp(cfg = loadConfig()) {
     notify.client(a.email, `You're booked: ${type.name}, ${when}`,
       `Hi ${a.name.split(" ")[0]},\n\nYou're booked at ${biz.name} for ${type.name} (${type.minutes} min) on ${when}.\n\n` +
       `${biz.address}\n${biz.phone}\n\n` +
-      (intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total} short forms, about ${docs.total * 3} minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
+      (intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
       (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
         : type.remote ? `This visit is on video. Dr. Jared will send you a secure meeting link before your appointment. Please join from a quiet, private room so you can show the movements he asks about.`
         : `Please wear comfortable clothes you can move in.`) +
