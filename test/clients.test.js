@@ -611,3 +611,28 @@ test("password codes: forgot by email, Google user sets first password, change w
   assert.ok(file || true);
   assert.ok(tok);
 });
+
+test("leaderboard: today, this week, this month and all time, each with when it resets", async (t) => {
+  const prev = process.env.LEADERBOARD_PACERS; process.env.LEADERBOARD_PACERS = "off";
+  t.after(() => { if (prev === undefined) delete process.env.LEADERBOARD_PACERS; else process.env.LEADERBOARD_PACERS = prev; });
+  const s = await start(); t.after(s.close);
+  const a = (await signup(s)).body.token;
+  const b = (await signup(s, { name: "Lee Park", email: "lee@example.com" })).body.token;
+  await s.call("POST", "/api/me/workouts", { title: "Core", goal: "Core & Spine", minutes: 20, exercises: 6 }, a);
+  const board = async (period, tok = b) => (await s.call("GET", `/api/me/leaderboard?period=${period}`, undefined, tok)).body;
+  // 2026-11-02 05:00 in New York (a Monday)
+  const want = { day: "2026-11-03", week: "2026-11-09", month: "2026-12-01", all: null };
+  for (const [period, resetsOn] of Object.entries(want)) {
+    const d = await board(period);
+    assert.equal(d.period, period); assert.equal(d.resetsOn, resetsOn, period);
+    assert.deepEqual(d.top.map((r) => [r.name, r.score]), [["Pat D.", 55]], period);
+    assert.equal(d.me, null, "Lee has no XP yet");
+  }
+  assert.equal((await board("nonsense")).period, "week");
+  assert.equal((await board("day", a)).me.rank, 1);
+  // monthly XP counts only this calendar month
+  const { rewards } = require("../lib/rewards");
+  const r = rewards({ workouts: [{ date: "2026-10-30", minutes: 20, completedAt: "2026-10-30T12:00:00Z" }, { date: "2026-11-01", minutes: 20, completedAt: "2026-11-01T12:00:00Z" }], painLog: [], visits: [], vitals: [], actions: [], bookings: [] }, "2026-11-02");
+  assert.ok(r.xp > r.monthXp && r.monthXp > 0, `lifetime ${r.xp} > month ${r.monthXp} > 0`);
+  assert.equal(r.todayXp, 0);
+});
