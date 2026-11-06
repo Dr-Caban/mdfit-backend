@@ -64,6 +64,13 @@ test("server records logins, failed logins and every admin look at a patient", a
   assert.equal(view.actor, "admin:coach@example.com"); assert.equal(view.subject, me.id);
   assert.ok(!JSON.stringify(log.entries).includes("127.0.0.1"), "IPs are stored hashed");
   assert.match(log.publicKey, /BEGIN PUBLIC KEY/);
+  assert.equal(log.nextBefore, null, "everything fit on one page");
+  // paging: newest first, ?before=<seq> continues where the last page stopped, no overlap or gaps
+  const p1 = (await call("GET", "/api/admin/audit?limit=2", undefined, adm)).body;
+  assert.equal(p1.entries.length, 2); assert.equal(p1.nextBefore, p1.entries[1].seq);
+  const p2 = (await call("GET", `/api/admin/audit?limit=2&before=${p1.nextBefore}`, undefined, adm)).body;
+  assert.equal(p2.entries.length, 2); assert.equal(p2.entries[0].seq, p1.nextBefore - 1);
+  assert.ok(p2.entries.every((e) => e.seq < p1.nextBefore));
   const v = (await call("GET", "/api/admin/audit/verify", undefined, adm)).body;
   assert.equal(v.ok, true); assert.ok(v.entries >= 5);
 });

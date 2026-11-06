@@ -98,6 +98,11 @@ test("pain log: add, validate, list in order, delete", async (t) => {
   assert.equal(e.date, "2026-11-02");
   const log = (await s.call("GET", "/api/me/pain", undefined, tok)).body;
   assert.deepEqual(log.map((x) => x.level), [7, 4]);
+  assert.equal(log[0].note, "stairs");
+  // the free-text note is encrypted on disk (area, level and date stay readable for lists and stats)
+  const raw = fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8");
+  assert.ok(!raw.includes("stairs"), "pain note is encrypted at rest");
+  assert.ok(raw.includes('"Knee"') && raw.includes('"v1:'), "structured fields stay plain; note is ciphertext");
   assert.equal((await s.call("DELETE", `/api/me/pain/${e.id}`, undefined, tok)).status, 200);
   assert.equal((await s.call("GET", "/api/me/pain", undefined, tok)).body.length, 1);
 });
@@ -124,6 +129,8 @@ test("admin: client list, detail, assign plan, client sees plan", async (t) => {
   const mine = (await s.call("GET", "/api/me", undefined, tok)).body.client.plan;
   assert.equal(mine.exercises[0].name, "Dead bug");
   assert.equal(mine.notes, "Walk 10 min after sitting.");
+  assert.ok(!fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8").includes("Walk 10 min"), "plan notes are encrypted at rest");
+  assert.equal((await s.call("GET", `/api/admin/clients/${list[0].id}`, undefined, admin)).body.plan.notes, "Walk 10 min after sitting.");
 });
 
 test("password reset link works once and signs out old sessions; password change too", async (t) => {

@@ -242,6 +242,10 @@ test("appointments: availability, notice window, overlap, cancel, admin status",
 
   const upd = await s.call("PATCH", `/api/admin/appointments/${list[0].id}`, { status: "completed", adminNotes: "Left knee, VMO weak" });
   assert.equal(upd.body.status, "completed");
+  assert.equal(upd.body.adminNotes, "Left knee, VMO weak");
+  // visit notes are encrypted on disk, readable again through the admin API and CSV
+  assert.ok(!fs.readFileSync(path.join(s.dataDir, "appointments.json"), "utf8").includes("VMO weak"), "admin notes are encrypted at rest");
+  assert.equal((await s.call("GET", "/api/admin/appointments?all=1")).body.find((x) => x.id === list[0].id).adminNotes, "Left knee, VMO weak");
   // an old email cancel link can't turn a completed (or no-show) visit into "cancelled"
   assert.equal((await s.call("POST", `/api/appointments/${call.body.appointment.id}/cancel`, { token: call.body.appointment.cancelToken })).status, 409);
   assert.equal((await s.call("PATCH", `/api/admin/appointments/${list[0].id}`, { status: "maybe" })).status, 400);
@@ -251,6 +255,7 @@ test("appointments: availability, notice window, overlap, cancel, admin status",
   assert.equal(pat.painLevel, 5);
   assert.equal(pat.status, "cancelled");
   assert.match((await s.call("GET", "/api/admin/appointments.csv")).text, /c@example\.com/);
+  assert.match((await s.call("GET", "/api/admin/appointments.csv")).text, /VMO weak/);
   const stats = (await s.call("GET", "/api/admin/stats")).body;
   assert.equal(stats.appointmentsWeek, 1); // the call was marked completed, the eval is still booked
 });
@@ -288,20 +293,40 @@ test("email notifications go to owner and client when configured", async (t) => 
     resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>",
     notifyEmail: "owner@example.com", siteUrl: "https://mdfit.example.com"
   }); t.after(s.close);
-  await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "09:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", areas: ["Shoulder"], painLevel: 3 });
-  await s.call("POST", "/api/leads", { name: "Sam Lee", email: "sam@example.com", areas: ["Neck"], painLevel: 4 });
-  for (let i = 0; i < 250 && sent.length < 3; i++) await new Promise((r) => setTimeout(r, 20)); // emails are paced ~0.6 s apart
-  assert.equal(sent.length, 3);
+  await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "09:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", areas: ["Shoulder"], painLevel: 3, notes: "Torn labrum last year" });
+  await s.call("POST", "/api/leads", { name: "Sam Lee", email: "sam@example.com", areas: ["Neck"], painLevel: 4, surgery: "Had surgery recently", message: "Herniated disc C5-C6" });
+  await s.call("POST", "/api/feedback", { name: "Lou Low", email: "lou@example.com", rating: 3, text: "My sciatica is better but not gone.", publish: false });
+  for (let i = 0; i < 400 && sent.length < 5; i++) await new Promise((r) => setTimeout(r, 20)); // emails are paced ~0.6 s apart
+  assert.equal(sent.length, 5);
   assert.equal(sent[0].auth, "Bearer re_test");
   const owner = sent.filter((m) => m.to[0] === "owner@example.com");
   const client = sent.find((m) => m.to[0] === "pat@example.com");
-  assert.equal(owner.length, 2);
+  assert.equal(owner.length, 3);
   assert.match(client.subject, /Evaluation/);
   assert.match(client.text, /https:\/\/mdfit\.example\.com\/cancel\?kind=appointment&id=/);
-  assert.ok(owner.some((m) => /Pain: 4\/10/.test(m.text))); // consult request (unchanged)
+  assert.ok(!/labrum/.test(client.text), "the patient's own booking note isn't echoed back by email");
   const bookingMail = owner.find((m) => /New booking/.test(m.subject));
-  assert.ok(!/Shoulder|Pain: 3/.test(bookingMail.text), "booking emails carry no health details");
+  assert.ok(!/Shoulder|Pain: 3|labrum/.test(bookingMail.text), "booking emails carry no health details");
   assert.match(bookingMail.text, /Admin → Appointments/);
+  // consult requests: contact details and service only; pain, surgery and their message stay in Admin
+  const leadMail = owner.find((m) => /evaluation request/.test(m.subject));
+  assert.match(leadMail.text, /Sam Lee\nsam@example\.com/);
+  assert.ok(!/Neck|Pain: 4|surgery recently|Herniated/.test(leadMail.text), "lead emails carry no health details");
+  assert.match(leadMail.text, /Admin → Leads/);
+  // reviews: the rating goes out, the text (often about a condition) does not
+  const reviewMail = owner.find((m) => /New review/.test(m.subject));
+  assert.match(reviewMail.subject, /3\/5 from Lou Low/);
+  assert.ok(!/sciatica/.test(reviewMail.text), "review emails carry no review text");
+  assert.match(reviewMail.text, /Admin → Reviews/);
+  // and the same free text is encrypted where it's stored
+  const disk = (f) => fs.readFileSync(path.join(s.dataDir, f), "utf8");
+  assert.ok(!disk("appointments.json").includes("labrum"), "booking notes encrypted at rest");
+  assert.ok(!disk("leads.json").includes("Herniated"), "lead message encrypted at rest");
+  assert.ok(!disk("feedback.json").includes("sciatica"), "review text encrypted at rest");
+  await s.login();
+  assert.equal((await s.call("GET", "/api/admin/leads")).body[0].message, "Herniated disc C5-C6");
+  assert.equal((await s.call("GET", "/api/admin/feedback")).body[0].text, "My sciatica is better but not gone.");
+  assert.equal((await s.call("GET", "/api/admin/appointments")).body[0].notes, "Torn labrum last year");
 });
 
 test("services, payment plans and Medical Massage are public and admin-editable", async (t) => {
@@ -376,4 +401,52 @@ test("analytics: device, source and location mix with percentages", async (t) =>
   assert.equal(pct(m.sources, "Direct / typed / bookmark"), 25);
   assert.equal(m.places[0].name, "Sarasota, FL");
   assert.equal(pct(m.os, "iOS"), 50);
+});
+
+test("intake documents: every booking gets a packet; each document saves on its own; Admin sees status and answers", async (t) => {
+  const s = await start(); t.after(s.close);
+  const ok = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "10:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  assert.equal(ok.status, 201); assert.equal(ok.body.appointment.intake, true);
+  const { id, cancelToken: token } = ok.body.appointment;
+  assert.equal(ok.headers.get("cache-control"), "no-store", "booking reply (carries the private token) is never cached");
+  assert.equal((await s.call("GET", `/api/appointments/${id}/intake?token=nope`)).status, 404, "token required");
+  const pr = await s.call("GET", `/api/appointments/${id}/intake?token=${token}`), p = pr.body;
+  assert.equal(pr.headers.get("cache-control"), "no-store");
+  assert.deepEqual(p.docs.map((d) => d.id), ["info", "pain", "history", "consent"], "evaluation packet (no massage form)");
+  assert.equal(p.prefill.email, "pat@example.com"); assert.equal(p.done, false); assert.equal(p.completed, 0);
+  const save = (doc, body) => s.call("POST", `/api/appointments/${id}/intake/${doc}`, { token, ...body });
+  assert.equal((await save("massage", {})).status, 404, "massage form isn't part of an evaluation");
+  assert.equal((await save("info", { name: "Pat Doe" })).status, 400, "required fields enforced");
+  assert.equal((await save("info", { name: "Pat Doe", dob: "1980-02-03", phone: "941-555-0100", email: "pat@example.com", emergencyName: "Sam Doe", emergencyPhone: "941-555-0199", sex: "Robot" })).status, 400, "options enforced");
+  assert.equal((await save("info", { name: "Pat Doe", dob: "1980-02-03", phone: "941-555-0100", email: "pat@example.com", emergencyName: "Sam Doe", emergencyPhone: "941-555-0199" })).status, 201);
+  assert.equal((await save("pain", { complaint: "Right knee hurts on stairs", areas: ["Right knee", "Tail"], started: "2 to 6 weeks ago", painNow: 6, goals: "Hike again" })).status, 201);
+  assert.equal((await save("history", { redFlags: "No", medications: "Ibuprofen" })).status, 201);
+  assert.equal((await save("consent", { treatment: true, privacy: true, signature: "Pat Doe" })).status, 400, "payment policy must be agreed");
+  const last = await save("consent", { treatment: true, privacy: true, financial: true, signature: "Pat Doe" });
+  assert.equal(last.status, 201); assert.deepEqual(last.body, { ok: true, total: 4, completed: 4, done: true });
+  // the link holder never gets saved answers back, only which documents are done
+  const again = (await s.call("GET", `/api/appointments/${id}/intake?token=${token}`));
+  assert.ok(again.body.docs.every((d) => d.done), "all marked done");
+  assert.ok(!again.text.includes("Right knee hurts") && !again.text.includes("Ibuprofen"), "answers are never echoed to the intake link");
+  await s.login();
+  const appt = (await s.call("GET", "/api/admin/appointments")).body.find((a) => a.id === id);
+  assert.deepEqual([appt.documents.done, appt.documents.total, appt.documents.complete], [4, 4, true]);
+  const vr = await s.call("GET", `/api/admin/appointments/${id}/intake`), v = vr.body;
+  assert.equal(vr.headers.get("cache-control"), "no-store");
+  assert.deepEqual(v.docs.map((d) => d.title), ["Client information", "Pain Assessment Initial Intake", "Health history", "Consent & policies"]);
+  const pain = v.docs[1].fields;
+  assert.equal(pain.find((f) => f.label.startsWith("Where do you feel")).value, "Right knee", "unknown options dropped");
+  assert.equal(pain.find((f) => f.label === "Pain right now").value, "6/10");
+  assert.ok(v.docs[3].fields.some((f) => f.label === "Signed"));
+  // answers are encrypted at rest
+  const raw = fs.readFileSync(path.join(s.dataDir, "intakes.json"), "utf8");
+  assert.ok(!raw.includes("Right knee hurts"), "intake answers are encrypted on disk");
+  // audit ledger: the patient's submissions and the admin's view are recorded by appointment id, without answers
+  await new Promise((r) => setTimeout(r, 50));
+  const audit = (await s.call("GET", `/api/admin/audit?subject=${id}`)).body.entries;
+  const acts = audit.map((e) => e.action);
+  assert.ok(acts.includes("intake.open") && acts.filter((a) => a === "intake.submit").length === 4 && acts.includes("admin.view /appointments/:id/intake"), acts.join(","));
+  const sub = audit.find((e) => e.action === "intake.submit" && e.meta.doc === "pain");
+  assert.equal(sub.actor, "patient"); assert.equal(sub.subject, id);
+  assert.ok(!JSON.stringify(audit).match(/Right knee|Ibuprofen|Pat Doe|pat@example/), "audit entries hold ids, never answers, names or emails");
 });

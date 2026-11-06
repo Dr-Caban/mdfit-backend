@@ -45,6 +45,14 @@ test("bot filter, security headers, burst rate limit, real client IP from the ed
   assert.equal((await s.call("GET", "/api/content", { headers: { ...edge, "x-mdfit-client-ip": "203.0.113.8" } })).status, 200);
 });
 
+test("no-store on anything personal: accounts, admin, intake and booking replies; public content stays cacheable", async (t) => {
+  const s = await start(); t.after(s.close);
+  for (const u of ["/api/me", "/api/admin/clients", "/api/clients/login", "/api/appointments/x/intake?token=y", "/api/appointments", "/api/feedback/reward/X"])
+    assert.equal((await s.call("GET", u)).headers.get("cache-control"), "no-store", u);
+  assert.equal((await s.call("GET", "/api/site")).headers.get("cache-control"), "no-cache");
+  assert.equal((await s.call("GET", "/api/feedback")).headers.get("cache-control"), "no-cache", "approved public reviews");
+});
+
 test("data at rest: encrypted with DATA_ENC_KEY, plain files migrate, wrong key fails loudly", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-store-"));
   const plain = createStore(dir);

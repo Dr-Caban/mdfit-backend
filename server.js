@@ -11,8 +11,9 @@ const { createCal, verifySignature, normaliseBooking } = require("./lib/cal");
 const { createPlaces } = require("./lib/google");
 const { mountClients } = require("./lib/clients");
 const { mountContent } = require("./lib/content");
-const { mountMessages } = require("./lib/messages");
-const { mountIntake, MASSAGE_TYPES } = require("./lib/intake");
+const { mountMessages, cipher } = require("./lib/messages");
+const { phiStore } = require("./lib/phi");
+const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
 const { mountFeedbackReports } = require("./lib/feedback-reports");
 const { mountAnalytics } = require("./lib/analytics");
 const { mountVideos } = require("./lib/videos");
@@ -118,7 +119,9 @@ function toCsv(rows, cols) {
 }
 
 function createApp(cfg = loadConfig()) {
-  const store = createStore(cfg.dataDir, { key: cfg.dataKey });
+  // Free-text health notes (visit notes, pain diary, plan, consult messages, reviews) are field-encrypted as well,
+  // with the same key as messages, so they're unreadable even in a store that has no DATA_ENC_KEY.
+  const store = phiStore(createStore(cfg.dataDir, { key: cfg.dataKey }), cipher([process.env.MESSAGE_ENC_KEY, cfg.sessionSecret]));
   // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
   const EMAIL_LOG_DAYS = 60, EMAIL_LOG_FAILS = 50;
   function logEmail(r) {
@@ -380,7 +383,8 @@ function createApp(cfg = loadConfig()) {
       const route = req.route ? (base && !String(req.baseUrl || "").startsWith(base) ? base : (req.baseUrl || "")) + req.route.path : p;
       const key = `${m} ${route}`, ok = res.statusCode < 400;
       const params = req.params || {};
-      const subject = params.clientId || (route.includes("/clients/:id") ? params.id : "") || (req.client && req.client.id) || "";
+      // Subject is the record's id (client, appointment, lead...), never a name or email
+      const subject = params.clientId || params.id || (req.client && req.client.id) || "";
       let actor = "", action = "";
       if (p === "/api/admin/login") { actor = "admin"; action = ok ? "auth.admin.login" : "auth.admin.login_failed"; }
       else if (p === "/api/clients/login") { actor = ok ? "client" : "anonymous"; action = ok ? "auth.client.login" : "auth.client.login_failed"; }
@@ -531,7 +535,8 @@ function createApp(cfg = loadConfig()) {
     activity("feedback", { email: f.email, rating: f.rating });
     const biz = settings().business;
     const subUrl = `${cfg.siteUrl}/account#premium`;
-    notify.owner(`New review: ${f.rating}/5 from ${f.name}`, `${f.name} <${f.email}>\n${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}\n\n${f.text}\n\n${f.publish ? "OK to publish (approve it in Admin → Reviews)." : "Private: do not publish."}\nReward code: ${code} (${pct}% off first month)`);
+    // The review text stays out of email (private reviews often describe a condition); it's in Admin → Reviews.
+    notify.owner(`New review: ${f.rating}/5 from ${f.name}`, `${f.name} <${f.email}>\n${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}\n\n${f.publish ? "OK to publish (approve it in Admin → Reviews)." : "Private: do not publish."}\nFor privacy the review itself isn't in this email. Read it in Admin → Reviews:\n${cfg.siteUrl || ""}/admin\n\nReward code: ${code} (${pct}% off first month)`);
     notify.client(f.email, `Thank you! ${pct}% off your first month`, `Hi ${f.name.split(" ")[0]},\n\nThank you for your feedback. As promised, here's ${pct}% off your first month of MD Fit membership: unlimited workouts, every program, custom plans and messaging with Dr. Jared.\n\nYour code: ${code}\nUse it here: ${subUrl}\n\n${biz.name}\n${biz.phone}`);
     res.status(201).json({ ok: true, rewardCode: code, rewardPct: pct, subscribeUrl: subUrl, message: `Thank you! Here's ${pct}% off your first month.` });
   });
@@ -607,7 +612,9 @@ function createApp(cfg = loadConfig()) {
     const when = `${prettyDate(a.date)} at ${prettyTime(a.time)}`;
     const biz = s.business;
     const isMassage = MASSAGE_TYPES.includes(type.id);
-    const intakeUrl = isMassage && cfg.siteUrl ? `${cfg.siteUrl}/intake?id=${appt.id}&token=${appt.cancelToken}` : "";
+    // Every booking gets the new-patient intake documents (private link, same token as the cancel link)
+    const intakeUrl = cfg.siteUrl ? `${cfg.siteUrl}/intake?id=${appt.id}&token=${appt.cancelToken}` : "";
+    const docs = packetStatus(appt);
     // Health details (pain areas, pain level, notes) stay out of email; they're in Admin → Appointments.
     notify.owner(`New booking: ${type.name}, ${when}`,
       [`${a.name}\n${a.email}\n${a.phone}`, `${type.name} (${type.minutes} min)\n${when}`,
@@ -616,14 +623,15 @@ function createApp(cfg = loadConfig()) {
     notify.client(a.email, `You're booked: ${type.name}, ${when}`,
       `Hi ${a.name.split(" ")[0]},\n\nYou're booked at ${biz.name} for ${type.name} (${type.minutes} min) on ${when}.\n\n` +
       `${biz.address}\n${biz.phone}\n\n` +
-      (isMassage ? `Before your massage, please fill out the short intake form (about 3 minutes):\n${intakeUrl}`
+      (intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total} short forms, about ${docs.total * 3} minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
+      (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
         : type.remote ? `This visit is on video. Dr. Jared will send you a secure meeting link before your appointment. Please join from a quiet, private room so you can show the movements he asks about.`
         : `Please wear comfortable clothes you can move in.`) +
       (link ? `\n\nNeed to cancel? Please give at least 24 hours' notice: ${link}` : "") + `\n\n${biz.name}`);
 
     res.status(201).json({
       ok: true,
-      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, intake: isMassage },
+      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, intake: true, intakeDocs: docs.total },
       message: `You're booked: ${type.name}, ${when}.`
     });
   });
@@ -659,15 +667,12 @@ function createApp(cfg = loadConfig()) {
     list.unshift(lead);
     store.write("leads", list);
     activity("lead", { email: lead.email, service: lead.service });
+    // Health details (goal, pain areas and level, surgery, their message) stay out of email; they're in Admin → Leads.
     notify.owner(`New evaluation request: ${lead.name}`, [
       `${lead.name}\n${lead.email}\n${lead.phone || "(no phone)"}`,
-      `Service: ${lead.service}\nGoal: ${lead.goal}`,
-      lead.areas.length && `Where: ${lead.areas.join(", ")}`,
-      lead.painLevel !== null && `Pain: ${lead.painLevel}/10`,
-      lead.duration && `How long: ${lead.duration}`,
-      lead.surgery && `Surgery: ${lead.surgery}`,
+      `Service: ${lead.service}`,
       lead.preferredTime && `Best time: ${lead.preferredTime}`,
-      lead.message
+      `For privacy, what they told us about their pain isn't in this email. Read it in Admin → Leads:\n${cfg.siteUrl || ""}/admin`
     ].filter(Boolean).join("\n\n"));
     res.status(201).json({ ok: true, message: "Thanks! We'll call you within one business day to get you started." });
   });
@@ -858,7 +863,7 @@ function createApp(cfg = loadConfig()) {
     const all = req.query.all === "1";
     res.json(appointments().filter((a) => all || (a.date >= today && a.status !== "cancelled"))
       .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1) * (all ? -1 : 1))
-      .map(({ cancelToken, ...a }) => a));
+      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a) })));
   });
   admin.patch("/appointments/:id", async (req, res) => {
     const list = appointments();
@@ -888,11 +893,14 @@ function createApp(cfg = loadConfig()) {
       .send(toCsv(appointments(), ["date", "time", "typeName", "minutes", "name", "email", "phone", "areas", "painLevel", "notes", "status", "adminNotes", "createdAt"]));
   });
 
-  // Audit ledger: recent entries, filters, and full chain verification
+  // Audit ledger: recent entries (newest first; page back with ?before=<seq> from the previous page's nextBefore),
+  // filters, and full chain verification
   admin.post("/audit/anchor", (req, res) => { publishAnchor(); res.json({ anchors: audit.anchors().slice(-5).reverse() }); });
   admin.get("/audit", (req, res) => {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(req.query.limit, 10) || 200));
-    res.json({ entries: audit.list({ limit, subject: req.query.subject || undefined, action: req.query.action || undefined }), publicKey: audit.publicPem, fingerprint: audit.fingerprint });
+    const before = Number.parseInt(req.query.before, 10) || undefined;
+    const entries = audit.list({ limit, before, subject: req.query.subject || undefined, actor: req.query.actor || undefined, action: req.query.action || undefined });
+    res.json({ entries, nextBefore: entries.length === limit ? entries[entries.length - 1].seq : null, publicKey: audit.publicPem, fingerprint: audit.fingerprint });
   });
   admin.get("/audit/verify", (req, res) => {
     const v = audit.verify();
@@ -1065,7 +1073,7 @@ function createApp(cfg = loadConfig()) {
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
-  mountIntake({ app, admin, store, cfg, notify, activity, limiter, appointments, tokenMatches, prettyDate, prettyTime });
+  mountIntake({ app, admin, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   mountAnalytics({ app, admin, store, limiter });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
