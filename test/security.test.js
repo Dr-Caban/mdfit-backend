@@ -16,7 +16,7 @@ async function start(extra = {}) {
     const r = await fetch(base + url, { method, headers: { "content-type": "application/json", "user-agent": "Mozilla/5.0 (iPhone) Safari", ...headers }, body: body && JSON.stringify(body) });
     return { status: r.status, headers: r.headers, body: await r.json().catch(() => undefined) };
   };
-  return { call, dataDir, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
+  return { call, app, dataDir, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
 test("edge gate: direct calls refused, edge calls and signed webhooks allowed", async (t) => {
@@ -131,4 +131,32 @@ test("rate limits: signed-in users are limited per account, so many patients on 
   assert.equal(last.status, 200, "a second patient on the same Wi-Fi isn't affected");
   for (let i = 0; i < 121; i++) last = await s.call("GET", "/api/content", { headers: edge });
   assert.equal(last.status, 429, "anonymous traffic from that address is still capped at 120 per 10 s");
+});
+
+test("live calendar: a change in Google Calendar is pushed to open booking pages and the admin over socket.io", async (t) => {
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sa = JSON.stringify({ client_email: "mdfit@proj.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+  let busy = [{ start: "2026-11-04T16:00:00Z", end: "2026-11-04T17:00:00Z" }];
+  const fetchImpl = async (url, opts = {}) => {
+    const json = (status, body) => ({ ok: status < 300, status, json: async () => body, text: async () => JSON.stringify(body) });
+    if (url.includes("oauth2.googleapis.com/token")) return json(200, { access_token: "ya29.test", expires_in: 3600 });
+    if (url.endsWith("/freeBusy")) return json(200, { calendars: { "dr@example.com": { busy } } });
+    return json(404, {});
+  };
+  const calsync = createCalSync({ serviceAccount: Buffer.from(sa).toString("base64"), calendarId: "dr@example.com", tz: "America/New_York", zonedToUtc, fetchImpl });
+  const s = await start({ calsync }); t.after(s.close);
+  const sent = [];
+  s.app.set("rt", { emitBookingUpdate: (d) => sent.push(["slots_changed", d]), emitToAdmin: (ev, data) => sent.push([ev, data]), emitActivity: () => {} });
+  const watch = s.app.get("watchCalendar");
+  assert.deepEqual(await watch(), [], "first check only records");
+  assert.deepEqual(await watch(), [], "nothing changed");
+  assert.equal(sent.length, 0);
+  // Dr. Jared adds an event on Nov 6 and moves the Nov 4 one
+  busy = [{ start: "2026-11-04T18:00:00Z", end: "2026-11-04T19:00:00Z" }, { start: "2026-11-06T14:00:00Z", end: "2026-11-06T15:00:00Z" }];
+  assert.deepEqual(await watch(), ["2026-11-04", "2026-11-06"]);
+  assert.deepEqual(sent, [["slots_changed", "2026-11-04"], ["slots_changed", "2026-11-06"], ["calendar_changed", { dates: ["2026-11-04", "2026-11-06"] }]]);
+  // and the booking page now offers 11:00 on Nov 4 again but not 1:00 pm
+  const site = (await s.call("GET", "/api/site")).body, type = site.settings.appointmentTypes[0];
+  const day = (await s.call("GET", `/api/availability?type=${type.id}&from=2026-11-04&days=1`)).body.days[0];
+  assert.ok(!day.slots.includes("13:00"), "the moved event blocks 1 pm");
 });

@@ -55,6 +55,7 @@ function loadConfig() {
     googleKey: env("GOOGLE_PLACES_API_KEY"),
     googleServiceAccount: env("GOOGLE_SERVICE_ACCOUNT"),
     googleCalendarId: env("GOOGLE_CALENDAR_ID"),
+    calWatchMs: Math.max(0, Number(env("CAL_WATCH_SECONDS", "60")) || 0) * 1000,
     simplePracticeIcs: env("SIMPLEPRACTICE_ICS_URL"),
     googleUrl: env("GOOGLE_PLACES_URL", "https://places.googleapis.com/v1"),
     googleLegacyUrl: env("GOOGLE_PLACES_LEGACY_URL", "https://maps.googleapis.com/maps/api/place"),
@@ -902,13 +903,14 @@ function createApp(cfg = loadConfig()) {
   // Calendar sync status + SimplePractice feed link (kept on the server, encrypted at rest, never sent to the public site)
   admin.get("/calsync", (req, res) => {
     const u = spUrl();
-    res.json({ ...calsync.status(), simplepractice: u ? "configured" : "off", simplePracticeUrl: u ? u.replace(/(.{24}).+(.{6})$/, "$1…$2") : "" });
+    res.json({ ...calsync.status(), simplepractice: u ? "configured" : "off", simplePracticeUrl: u ? u.replace(/(.{24}).+(.{6})$/, "$1…$2") : "",
+      live: { everySec: Math.round((cfg.calWatchMs || 0) / 1000), lastCheck: calWatch.lastRun, lastChange: calWatch.lastChange } });
   });
   admin.put("/calsync", (req, res) => {
     const u = String((req.body && req.body.icsUrl) || "").trim();
     if (u && !/^(https|webcal):\/\/[^\s]+$/i.test(u)) return res.status(400).json({ error: "Paste the SimplePractice calendar link (starts with https:// or webcal://)." });
     store.write("calsync", { icsUrl: u.replace(/^webcal:/i, "https:") });
-    calsync.clear();
+    calsync.clear(); calWatch.sig.clear(); watchCalendar();
     res.json({ ok: true, simplepractice: u ? "configured" : "off" });
   });
   admin.post("/calsync/test", async (req, res) => {
@@ -917,6 +919,39 @@ function createApp(cfg = loadConfig()) {
     const busy = await calsync.busy(date, addDays(date, 13), { icsUrl: spUrl() });
     res.json({ ...calsync.status(), busyNext14Days: busy.length, bySource: busy.reduce((m, b) => ((m[b.source] = (m[b.source] || 0) + 1), m), {}) });
   });
+
+  // ---- Live calendar: re-read Google Calendar / SimplePractice busy times on a timer. When a day's busy times change
+  // (Dr. Jared adds, moves or deletes an event), every open booking page gets socket.io "slots_changed" for that day and
+  // the admin gets "calendar_changed", so nobody is shown a time that was just taken. The first run only records.
+  const calWatch = { sig: new Map(), lastRun: null, lastChange: null, running: false };
+  async function watchCalendar() {
+    if (calWatch.running || (!calsync.googleOn() && !spUrl())) return [];
+    calWatch.running = true;
+    try {
+      const { date: today } = nowParts(cfg.tz, cfg.now());
+      const to = addDays(today, Math.min(60, Math.max(1, settings().scheduling.daysAhead || 30)));
+      calsync.clear();
+      const busy = await calsync.busy(today, to, { icsUrl: spUrl() });
+      const changed = [], first = calWatch.sig.size === 0;
+      for (let d = today; d <= to; d = addDays(d, 1)) {
+        const sig = JSON.stringify(busyOn(d, busy));
+        if (!first && (calWatch.sig.get(d) || "[]") !== sig) changed.push(d);
+        calWatch.sig.set(d, sig);
+      }
+      for (const d of [...calWatch.sig.keys()]) if (d < today) calWatch.sig.delete(d);
+      calWatch.lastRun = new Date().toISOString();
+      if (changed.length) {
+        calWatch.lastChange = calWatch.lastRun;
+        const rt = app.get("rt");
+        if (rt) { changed.forEach((d) => rt.emitBookingUpdate(d)); rt.emitToAdmin("calendar_changed", { dates: changed }); }
+        logger.info("calendar_changed", { days: changed.length });
+      }
+      return changed;
+    } catch (e) { logger.error("calendar_watch_failed", { error: e.message }); return []; }
+    finally { calWatch.running = false; }
+  }
+  app.set("watchCalendar", watchCalendar);
+  app.set("calWatch", calWatch);
 
   // Reviews submitted on the site: approve to publish (only those who agreed), or hide
   admin.get("/feedback", (req, res) => res.json([...feedback()].reverse()));
@@ -1065,6 +1100,8 @@ if (require.main === module) {
   const server = http.createServer(app);
   const rt = createRealtime(server, cfg, { findClient: app.get("findClient") });
   app.set("rt", rt);
+  // Live calendar sync: check Google Calendar / SimplePractice every minute (CAL_WATCH_SECONDS, 0 = off)
+  if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
 
