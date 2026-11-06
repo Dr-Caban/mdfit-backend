@@ -160,3 +160,21 @@ test("live calendar: a change in Google Calendar is pushed to open booking pages
   const day = (await s.call("GET", `/api/availability?type=${type.id}&from=2026-11-04&days=1`)).body.days[0];
   assert.ok(!day.slots.includes("13:00"), "the moved event blocks 1 pm");
 });
+
+test("Google Calendar: busy times from several calendars; one not shared yet doesn't hide the others", async () => {
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sa = JSON.stringify({ client_email: "mdfit@proj.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+  let asked = null;
+  const fetchImpl = async (url, opts = {}) => {
+    const json = (status, body) => ({ ok: status < 300, status, json: async () => body });
+    if (url.includes("oauth2")) return json(200, { access_token: "t", expires_in: 3600 });
+    asked = JSON.parse(opts.body).items.map((x) => x.id);
+    return json(200, { calendars: { "dr@example.com": { busy: [{ start: "2026-11-04T16:00:00Z", end: "2026-11-04T17:00:00Z" }] }, "sp@group.calendar.google.com": { errors: [{ reason: "notFound" }] } } });
+  };
+  const cs = createCalSync({ serviceAccount: sa, calendarId: "dr@example.com, sp@group.calendar.google.com", tz: "America/New_York", zonedToUtc, fetchImpl });
+  const busy = await cs.busy("2026-11-04", "2026-11-04");
+  assert.deepStrictEqual(asked, ["dr@example.com", "sp@group.calendar.google.com"]);
+  assert.strictEqual(busy.length, 1, "the shared calendar's time still blocks");
+  assert.match(cs.status().lastError, /calendar 2: notFound/);
+  assert.strictEqual(cs.status().calendarId, "dr@example.com", "bookings go on the first calendar");
+});
