@@ -39,6 +39,7 @@ const check = (s, tok, habitId) => s.call("POST", "/api/me/habits/checkin", { ha
 const checkAll = async (s, tok, ids) => { let r; for (const id of ids) r = await check(s, tok, id); return r; };
 const workout = (s, tok, over = {}) => s.call("POST", "/api/me/workouts", { title: "Full Body Power", goal: "Full Body", minutes: 30, exercises: 8, ...over }, tok);
 const day = (n) => `2026-11-${String(n).padStart(2, "0")}`;
+const goalDay = async (s, tok) => { await workout(s, tok); return check(s, tok, "yoga"); }; // 30 + 20 = Beginner 50
 const xpOf = async (s, tok) => (await s.call("GET", "/api/me/rewards", undefined, tok)).body;
 
 test("owner's activity list: exact XP, once a day, undo the same day, feeds lifetime XP", async (t) => {
@@ -47,7 +48,8 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.equal((await s.call("GET", "/api/me/habits/today")).status, 401);
   const first = (await today(s, tok)).body;
   assert.equal(first.date, "2026-11-02");
-  assert.equal(first.points, 0); assert.equal(first.goal, 30);
+  assert.equal(first.points, 0); assert.equal(first.goal, 50); assert.equal(first.goalLevel, "beginner");
+  assert.deepEqual(first.goalLevels, { beginner: 50, intermediate: 75, pro: 100 });
   const want = { sunlight: 15, acupressure: 15, "foam-rolling": 15, "ice-bath": 20, "health-shot": 5, prayer: 10, meditation: 10, grounding: 5, "box-breathing": 5,
     walk: 15, sauna: 15, stretching: 5, yoga: 20, "no-screens": 15, massage: 20, journaling: 5, "red-light": 10, "active-recreation": 10, "challenge-send": 5, "challenge-do": 10 };
   assert.deepEqual(Object.fromEntries(first.habits.map((h) => [h.id, h.points])), want);
@@ -95,7 +97,7 @@ test("admins edit the list; past checks keep the XP they were earned with", asyn
   const at = await s.adminToken();
   assert.equal((await s.call("GET", "/api/admin/habits", undefined, tok)).status, 401);
   const cfg = (await s.call("GET", "/api/admin/habits", undefined, at)).body;
-  assert.equal(cfg.habits.length, 20); assert.equal(cfg.dailyGoal, 30);
+  assert.equal(cfg.habits.length, 20); assert.equal(cfg.dailyGoal, 50);
   const habits = cfg.habits.map((h) => (h.id === "prayer" ? { ...h, points: 25 } : h.id === "challenge-do" ? { ...h, points: 99 } : h));
   let r = await s.call("PUT", "/api/admin/habits", { habits: [...habits, { id: "sleep", name: "Sleep 8 hours", points: 10, how: "In bed by 10." }], dailyGoal: 40 }, at);
   assert.equal(r.status, 200);
@@ -117,27 +119,39 @@ test("admins edit the list; past checks keep the XP they were earned with", asyn
   assert.equal((await check(s, tok, "red-light")).status, 400);
 });
 
-test("a day qualifies on activities alone or with a workout (no caps, no frozen goal)", async (t) => {
+test("daily XP norms: Beginner 50, Intermediate 75, Pro 100; a day qualifies on activities alone or with a workout", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
   let r = (await checkAll(s, tok, ["grounding", "box-breathing", "journaling"])).body; // 15
-  assert.equal(r.qualifying, false); assert.equal(r.remaining, 15);
-  r = (await check(s, tok, "sunlight")).body; // 30
+  assert.equal(r.goal, 50); assert.equal(r.qualifying, false); assert.equal(r.remaining, 35);
+  r = (await checkAll(s, tok, ["sunlight", "ice-bath"])).body; // 50
   assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, true);
   s.setDay(day(3));
   await workout(s, tok);
   r = (await today(s, tok)).body;
-  assert.equal(r.workoutXp, 30); assert.equal(r.points, 0); assert.equal(r.total, 30); assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, false);
+  assert.equal(r.workoutXp, 30); assert.equal(r.total, 30); assert.equal(r.qualifying, false, "one 30-XP workout is short of the Beginner 50");
+  r = (await check(s, tok, "ice-bath")).body;
+  assert.equal(r.total, 50); assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, false);
+  // raise the norm: applies from today, past goal days stay goal days
+  r = (await s.call("PUT", "/api/me/habits/goal", { level: "intermediate" }, tok)).body;
+  assert.equal(r.goalLevel, "intermediate"); assert.equal(r.goal, 75); assert.equal(r.qualifying, false); assert.equal(r.remaining, 25);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "pro" }, tok)).body.goal, 100);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite-ish" }, tok)).status, 400);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "pro" })).status, 401);
+  const hist = (await s.call("GET", "/api/me/habits/history?month=2026-11", undefined, tok)).body;
+  assert.equal(hist.days.find((d) => d.date === day(2)).qualifying, true, "Nov 2 was judged at Beginner 50");
+  s.setDay(day(4));
+  assert.equal((await today(s, tok)).body.goal, 100, "the chosen norm carries forward");
 });
 
 test("streak repairs: 3 in a row earn one; repairs bridge the shown streak but never create qualifying days", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok, client } = await signup(s);
-  for (const d of [2, 3, 4]) { s.setDay(day(d)); await workout(s, tok); }
+  for (const d of [2, 3, 4]) { s.setDay(day(d)); await goalDay(s, tok); }
   let r = (await today(s, tok)).body;
   assert.equal(r.streak.current, 3); assert.equal(r.repairs.available, 1);
   // Nov 5 missed, Nov 6 back
-  s.setDay(day(6)); await workout(s, tok);
+  s.setDay(day(6)); await goalDay(s, tok);
   r = (await today(s, tok)).body;
   assert.equal(r.streak.current, 4, "shown streak bridges the repaired day (it doesn't count as a day itself)");
   assert.equal(r.streak.actual, 1); assert.equal(r.streak.missed, 1);
@@ -153,7 +167,7 @@ test("streak repairs: 3 in a row earn one; repairs bridge the shown streak but n
   assert.deepEqual(H.qualifyingDays(client.id, "2026-11"), [day(2), day(3), day(4), day(6)]);
   assert.throws(() => api.qualifyingDays(client, "Nov"), /Month/);
   // a 2-day gap with no repairs left resets the shown streak, and nothing is spent
-  s.setDay(day(9)); await workout(s, tok);
+  s.setDay(day(9)); await goalDay(s, tok);
   r = (await today(s, tok)).body;
   assert.equal(r.streak.current, 1); assert.equal(r.repairs.used, 1);
   // a granted (referral) repair is earned but still can't create a day
@@ -166,8 +180,8 @@ test("streak repairs: 3 in a row earn one; repairs bridge the shown streak but n
 test("month history lists qualifying days, future days and today's partial", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
-  s.setDay(day(2)); await workout(s, tok);
-  s.setDay(day(3)); await check(s, tok, "walk"); // 15 < 30
+  s.setDay(day(2)); await goalDay(s, tok);
+  s.setDay(day(3)); await check(s, tok, "walk"); // 15 < 50
   s.setDay(day(4)); await today(s, tok);
   const h = (await s.call("GET", "/api/me/habits/history?month=2026-11", undefined, tok)).body;
   assert.equal(h.month, "2026-11"); assert.equal(h.days.length, 30);
@@ -178,4 +192,17 @@ test("month history lists qualifying days, future days and today's partial", asy
   assert.equal(h.days[4].future, true);
   const oct = (await s.call("GET", "/api/me/habits/history?month=2026-10", undefined, tok)).body;
   assert.equal(oct.days.length, 31); assert.equal(oct.qualifyingDays, 0);
+});
+
+test("MD Fit pain tracks and Pain Tool protocols earn the program 50 XP", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: tok } = await signup(s);
+  await workout(s, tok, { title: "Neck pain track", key: "track-neck-relief" });
+  assert.equal((await today(s, tok)).body.workoutXp, 50);
+  s.setDay(day(3));
+  await workout(s, tok, { title: "Scalenes protocol", key: "painproto-scalenes" });
+  assert.equal((await today(s, tok)).body.workoutXp, 50);
+  s.setDay(day(4));
+  await workout(s, tok, { title: "Something else", key: "trackx" });
+  assert.equal((await today(s, tok)).body.workoutXp, 30, "only real track/protocol keys count as a program");
 });
