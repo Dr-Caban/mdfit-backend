@@ -15,7 +15,9 @@ const { mountMessages, cipher } = require("./lib/messages");
 const { phiStore } = require("./lib/phi");
 const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
 // The account with this email (documents a patient filled from their dashboard count for every visit)
-const clientByEmail = (store, email) => store.read("clients", []).find((c) => c.email === String(email || "").toLowerCase()) || null;
+// The patient account an appointment belongs to: only set when a signed-in member booked it for themselves.
+// Never matched by email: anyone can type someone else's email into the public booking form.
+const clientOf = (store, a) => (a && a.clientId ? store.read("clients", []).find((c) => c.id === a.clientId) || null : null);
 const { mountFeedbackReports } = require("./lib/feedback-reports");
 const { mountAnalytics } = require("./lib/analytics");
 const { mountVideos } = require("./lib/videos");
@@ -202,6 +204,43 @@ function createApp(cfg = loadConfig()) {
         ? [...s.appointmentTypes, d.appointmentTypes.find((t) => t.id === "massage")] : (s.appointmentTypes || d.appointmentTypes)
     };
   };
+  // One-time price update (owner spec, Nov 2026): telehealth evaluation 60 min $150, returning follow-up 30 min $80.
+  // Only the old default values are replaced, so anything the owner already customised in Admin stays as it is.
+  (function telehealthPrices2026() {
+    const s = store.read("settings", null);
+    if (!s || s.telehealthPrices2026) return;
+    for (const t of s.appointmentTypes || []) {
+      if (t.id === "eval-remote" && /\$300\b/.test(t.description || "")) t.description = t.description.replace(/\$300\b/, () => "$150"); // a function: "$1…" in a replacement string means a capture group
+      if (t.id === "followup-remote" && t.minutes === 45 && /\$150\b/.test(t.description || "")) { t.minutes = 30; t.description = "A remote check-in by video for returning patients. $80."; }
+    }
+    for (const v of s.services || []) {
+      if (v.id === "eval-remote" && v.rate === 300) v.rate = 150;
+      if (v.id === "followup-remote" && v.rate === 150 && v.unit === "45 minutes") { v.rate = 80; v.unit = "30 minutes"; }
+    }
+    s.telehealthPrices2026 = true;
+    store.write("settings", s);
+  })();
+
+  // Telehealth is $150 an hour, prorated (owner, Nov 2026): 60 min $150, 30 min $75. Replaces only the previous
+  // defaults ($300 / $200 / $150 / $80), so prices the owner set by hand afterwards stay as they are.
+  (function telehealthHourly150() {
+    const s = store.read("settings", null);
+    if (!s || s.telehealthHourly150) return;
+    const price = (min) => `$${Math.round(150 * min / 60)}`;
+    for (const t of s.appointmentTypes || []) {
+      if (!["eval-remote", "session-remote", "followup-remote"].includes(t.id)) continue;
+      if (t.id === "followup-remote" && t.minutes === 45) t.minutes = 30;
+      t.description = String(t.description || "").replace(/\$(300|200|150|80)\b/, () => price(t.minutes || 60));
+    }
+    for (const v of s.services || []) {
+      if (!["eval-remote", "session-remote", "followup-remote"].includes(v.id)) continue;
+      const min = Number(String(v.unit || "60").match(/\d+/)) || 60;
+      if ([300, 200, 150, 80].includes(v.rate)) v.rate = Math.round(150 * min / 60);
+    }
+    s.telehealthHourly150 = true;
+    store.write("settings", s);
+  })();
+
   const classes = () => {
     let list = store.read("classes", null);
     if (list === null) {
@@ -219,7 +258,7 @@ function createApp(cfg = loadConfig()) {
 
   function activity(type, detail = {}) {
     const list = store.read("activity", []);
-    list.unshift({ time: new Date().toISOString(), type, ...detail });
+    list.unshift({ time: new Date().toISOString(), ...detail, type }); // the event type wins over any detail field named "type"
     store.write("activity", list.slice(0, ACTIVITY_MAX));
     logger.info("activity", { type, ...detail, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
@@ -283,6 +322,7 @@ function createApp(cfg = loadConfig()) {
       appt = { id: id(), ...fields, areas: [], painLevel: null, status: cancelled ? "cancelled" : "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString() };
       list.push(appt);
     } else {
+      if (appt.meetingLinkSetByAdmin) delete fields.meetingLink; // a link Dr. Jared set in Admin wins over Cal's on re-sync
       Object.assign(appt, fields, { updatedAt: new Date().toISOString() });
       if (cancelled) appt.status = "cancelled";
       else if (appt.status === "cancelled") appt.status = "booked";
@@ -589,7 +629,7 @@ function createApp(cfg = loadConfig()) {
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     // The free plan review is a reward: it needs an unused code from a submitted review
     let reward = null;
-    const fb = type === PLAN_REVIEW ? feedback() : null;
+    let fb = type === PLAN_REVIEW ? feedback() : null;
     if (fb) {
       const code = String((req.body && req.body.rewardCode) || "").trim().toUpperCase();
       reward = fb.find((f) => f.rewardCode === code);
@@ -597,18 +637,37 @@ function createApp(cfg = loadConfig()) {
       if (reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
     }
     const busy = await calsync.busy(a.date, a.date, { icsUrl: spUrl() });
+    // Other requests may have run while we waited for the calendar: the slot check reads appointments fresh, and the
+    // reward code is looked up again so two bookings can't both use it (and an older copy of reviews isn't written back)
+    if (fb) {
+      const code = reward.rewardCode;
+      fb = feedback(); reward = fb.find((f) => f.rewardCode === code);
+      if (!reward || reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
+    }
     if (!openSlots(type, a.date, s, busy).includes(a.time))
       return res.status(409).json({ error: "That time was just taken or isn't available. Pick another." });
+    // A signed-in member booking with their own email: the visit is linked to their account (documents on file count)
+    const bookedBy = (() => {
+      const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i), p = m && verifyToken(m[1], cfg.sessionSecret);
+      const c = p && p.role === "client" && store.read("clients", []).find((x) => x.id === p.sub);
+      return c && (c.pwv || 0) === p.pwv && c.email === a.email ? c : null;
+    })();
     const appt = {
       id: id(), ...a, typeName: type.name, minutes: type.minutes, status: "booked", adminNotes: "",
       cancelToken: newToken(), createdAt: new Date().toISOString(),
-      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {})
+      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {}),
+      ...(bookedBy ? { clientId: bookedBy.id } : {})
     };
     if (reward) { reward.rewardUsedAt = new Date().toISOString(); appt.rewardCode = reward.rewardCode; store.write("feedback", fb); }
     const list = appointments();
     list.push(appt);
     store.write("appointments", list);
-    activity("appointment", { email: a.email, type: type.id, date: a.date });
+    // A member without a phone on file (e.g. a Google sign-up) types one to book: keep it on their account too
+    if (bookedBy && !bookedBy.phone && a.phone) {
+      const cls = store.read("clients", []), me = cls.find((x) => x.id === bookedBy.id);
+      if (me && !me.phone) { me.phone = a.phone; store.write("clients", cls); }
+    }
+    activity("appointment", { email: a.email, typeId: type.id, date: a.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(a.date);
     syncBooking(appt);
 
@@ -617,7 +676,7 @@ function createApp(cfg = loadConfig()) {
     const isMassage = MASSAGE_TYPES.includes(type.id);
     // Every booking gets the new-patient intake documents (private link, same token as the cancel link)
     const intakeUrl = cfg.siteUrl ? `${cfg.siteUrl}/intake?id=${appt.id}&token=${appt.cancelToken}` : "";
-    const docs = packetStatus(appt, clientByEmail(store, appt.email));
+    const docs = packetStatus(appt, clientOf(store, appt));
     // Health details (pain areas, pain level, notes) stay out of email; they're in Admin → Appointments.
     notify.owner(`New booking: ${type.name}, ${when}`,
       [`${a.name}\n${a.email}\n${a.phone}`, `${type.name} (${type.minutes} min)\n${when}`,
@@ -625,7 +684,7 @@ function createApp(cfg = loadConfig()) {
     const link = cancelLink("appointment", appt);
     notify.client(a.email, `You're booked: ${type.name}, ${when}`,
       `Hi ${a.name.split(" ")[0]},\n\nYou're booked at ${biz.name} for ${type.name} (${type.minutes} min) on ${when}.\n\n` +
-      `${biz.address}\n${biz.phone}\n\n` +
+      (type.remote ? `Questions? Call or text ${biz.phone}.\n\n` : `${biz.address}\n${biz.phone}\n\n`) + // video visits: no clinic address
       (docs.complete ? `Your intake documents are on file, so there's nothing to fill out before this visit.\n\n`
         : intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total - docs.done} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
       (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
@@ -637,7 +696,7 @@ function createApp(cfg = loadConfig()) {
 
     res.status(201).json({
       ok: true,
-      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, meetingLink: appt.meetingLink || "", intake: true, intakeDocs: docs.total - docs.done, intakeDone: docs.complete },
+      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, meetingLink: appt.meetingLink || "", intake: true, intakeDocs: bookedBy ? docs.total - docs.done : docs.total, intakeDone: !!bookedBy && docs.complete },
       message: `You're booked: ${type.name}, ${when}.`
     });
   });
@@ -867,14 +926,14 @@ function createApp(cfg = loadConfig()) {
   admin.get("/appointments", (req, res) => {
     const { date: today } = nowParts(cfg.tz, cfg.now());
     const all = req.query.all === "1";
-    const byEmail = new Map(store.read("clients", []).map((c) => [c.email, c]));
+    const byId = new Map(store.read("clients", []).map((c) => [c.id, c]));
     res.json(appointments().filter((a) => all || (a.date >= today && a.status !== "cancelled"))
       .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1) * (all ? -1 : 1))
-      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, byEmail.get(a.email)) })));
+      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, a.clientId ? byId.get(a.clientId) : null) })));
   });
   admin.patch("/appointments/:id", async (req, res) => {
-    const list = appointments();
-    const appt = list.find((x) => x.id === req.params.id);
+    let list = appointments();
+    let appt = list.find((x) => x.id === req.params.id);
     if (!appt) return res.status(404).json({ error: "Appointment not found." });
     const b = req.body || {};
     if (b.status !== undefined) {
@@ -882,8 +941,13 @@ function createApp(cfg = loadConfig()) {
       // Cancelling a Cal booking here cancels it in Cal too, so Cal emails the client and frees the slot.
       if (b.status === "cancelled" && appt.status !== "cancelled" && appt.source === "cal") {
         try { await cal.cancel(appt.calUid, "Cancelled by MD Fit"); } catch (err) { return res.status(502).json({ error: err.message }); }
+        // Read again after waiting on Cal, so bookings saved meanwhile aren't overwritten by the older copy
+        list = appointments(); appt = list.find((x) => x.id === req.params.id);
+        if (!appt) return res.status(404).json({ error: "Appointment not found." });
       }
       if (b.status === "cancelled" && appt.status !== "cancelled") unsyncBooking(appt);
+      // Un-cancelling puts the visit back on Google Calendar
+      if (appt.status === "cancelled" && b.status !== "cancelled") { delete appt.googleEventId; syncBooking(appt); }
       appt.status = b.status;
     }
     if (b.adminNotes !== undefined) {
@@ -893,7 +957,7 @@ function createApp(cfg = loadConfig()) {
     let newLink = "";
     if (b.meetingLink !== undefined) {
       try { newLink = meetingUrl(b.meetingLink, "Meeting link"); } catch (err) { return res.status(400).json({ error: err.message }); }
-      if (newLink === (appt.meetingLink || "")) newLink = ""; else appt.meetingLink = newLink;
+      if (newLink === (appt.meetingLink || "")) newLink = ""; else { appt.meetingLink = newLink; appt.meetingLinkSetByAdmin = true; }
     }
     appt.updatedAt = new Date().toISOString();
     store.write("appointments", list);
@@ -915,17 +979,22 @@ function createApp(cfg = loadConfig()) {
     const type = s.appointmentTypes.find((t) => t.id === b.typeId);
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     if (!notify.enabled || !cfg.siteUrl) return res.status(503).json({ error: "Email isn't set up (RESEND_API_KEY, SITE_URL)." });
+    // A video visit is never sent without the way to join it
+    const room = (s.booking && s.booking.telehealthUrl) || "";
+    if (type.remote && !room) return res.status(400).json({ error: "Add your Video visit link first (Home → Hours & sync), so the email includes the link to join the call." });
     const note = String(b.message || "").trim().slice(0, 500);
     const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
     notify.client(c.email, `Book your ${type.name} with Dr. Jared`,
-      `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
-    activity("booking_link_sent", { email: c.email, type: type.id });
+      `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n` +
+      (type.remote ? `This visit is on video. At your appointment time, join here:\n${room}\n(The link is also in your booking confirmation and your MD Fit account.)\n\n` : "") +
+      `${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
+    activity("booking_link_sent", { email: c.email, typeId: type.id });
     res.json({ ok: true, link, message: `Booking link for ${type.name} emailed to ${c.name.split(" ")[0]}.` });
   });
 
   // Dr. Jared books the consultation himself: no payment (inpatients never pay; outpatient fees are settled outside
   // this flow), the video link goes to the patient right away, the slot is blocked and it lands on Google Calendar.
-  admin.post("/clients/:id/consult", (req, res) => {
+  admin.post("/clients/:id/consult", async (req, res) => {
     const c = clientById(req.params.id);
     if (!c) return res.status(404).json({ error: "Client not found." });
     const b = req.body || {}, s = settings();
@@ -933,16 +1002,24 @@ function createApp(cfg = loadConfig()) {
     const minutes = Number(b.minutes || 30);
     if (![15, 30, 45, 60, 90].includes(minutes)) return res.status(400).json({ error: "Length is 15, 30, 45, 60 or 90 minutes." });
     let link;
-    try { link = meetingUrl(b.meetingLink === undefined ? s.booking.telehealthUrl : b.meetingLink, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
+    // A blank link means the practice's video room
+    try { link = meetingUrl(String(b.meetingLink || "").trim() ? b.meetingLink : s.booking.telehealthUrl, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
     if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     const start = toMin(b.time), end = start + minutes;
+    const now = nowParts(cfg.tz, cfg.now());
+    if (b.date + b.time <= now.date + now.time) return res.status(400).json({ error: "That time has already passed. Pick a time in the future." });
+    // Dr. Jared's Google Calendar / SimplePractice busy blocks count too (read before the appointment check, so a
+    // booking that lands while we wait is still caught)
+    const busy = await calsync.busy(b.date, b.date, { icsUrl: spUrl() });
+    const block = busyOn(b.date, busy).find(([s0, e0]) => s0 < end && e0 > start);
+    if (block && !b.force) return res.status(409).json({ error: "That overlaps something on your calendar (Google Calendar or SimplePractice). Pick another time." });
     const clash = appointments().find((a) => a.date === b.date && a.status === "booked" && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
     if (clash && !b.force) return res.status(409).json({ error: `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
     const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
     const appt = { id: id(), typeId: "consult-video", typeName, minutes, date: b.date, time: b.time, name: c.name, email: c.email, phone: c.phone || "",
       notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
-      source: "admin", meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
+      source: "admin", clientId: c.id, meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
     const list = appointments(); list.push(appt); store.write("appointments", list);
     activity("consult_scheduled", { email: c.email, date: b.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(b.date);
@@ -988,6 +1065,27 @@ function createApp(cfg = loadConfig()) {
     calsync.clear(); calWatch.sig.clear(); watchCalendar();
     res.json({ ok: true, simplepractice: u ? "configured" : "off" });
   });
+  // Busy blocks from Google Calendar / SimplePractice for the Admin calendar, as clinic-time minutes per day.
+  // Times only (no titles or names). MD Fit's own visits, which are copied to Google, are left out so they don't show twice.
+  admin.get("/busy", async (req, res) => {
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || "")) ? String(req.query.from) : nowParts(cfg.tz, cfg.now()).date;
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 42);
+    let busy = [];
+    try { busy = await calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() }); } catch { busy = []; }
+    const appts = appointments().filter((a) => a.status !== "cancelled");
+    const out = [];
+    for (let i = 0; i < days; i++) {
+      const date = addDays(from, i);
+      const own = appts.filter((a) => a.date === date).map((a) => [toMin(a.time), toMin(a.time) + (a.minutes || 60)]);
+      for (const b of busy) {
+        const [r] = busyOn(date, [b]); if (!r) continue;
+        if (String(b.source).startsWith("google") && own.some(([s0, e0]) => s0 === r[0] && e0 === r[1])) continue;
+        out.push({ date, start: r[0], end: r[1], allDay: !!b.allDay || (r[0] === 0 && r[1] === 24 * 60), source: String(b.source).startsWith("google") ? "google" : "simplepractice" });
+      }
+    }
+    res.json({ busy: out, ...calsync.status() });
+  });
+
   admin.post("/calsync/test", async (req, res) => {
     const { date } = nowParts(cfg.tz, cfg.now());
     calsync.clear();
