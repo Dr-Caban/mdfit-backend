@@ -634,7 +634,7 @@ function createApp(cfg = loadConfig()) {
     const link = cancelLink("appointment", appt);
     notify.client(a.email, `You're booked: ${type.name}, ${when}`,
       `Hi ${a.name.split(" ")[0]},\n\nYou're booked at ${biz.name} for ${type.name} (${type.minutes} min) on ${when}.\n\n` +
-      `${biz.address}\n${biz.phone}\n\n` +
+      (type.remote ? `Questions? Call or text ${biz.phone}.\n\n` : `${biz.address}\n${biz.phone}\n\n`) + // video visits: no clinic address
       (docs.complete ? `Your intake documents are on file, so there's nothing to fill out before this visit.\n\n`
         : intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total - docs.done} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
       (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
