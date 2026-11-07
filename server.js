@@ -14,6 +14,8 @@ const { mountContent } = require("./lib/content");
 const { mountMessages, cipher } = require("./lib/messages");
 const { phiStore } = require("./lib/phi");
 const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
+// The account with this email (documents a patient filled from their dashboard count for every visit)
+const clientByEmail = (store, email) => store.read("clients", []).find((c) => c.email === String(email || "").toLowerCase()) || null;
 const { mountFeedbackReports } = require("./lib/feedback-reports");
 const { mountAnalytics } = require("./lib/analytics");
 const { mountVideos } = require("./lib/videos");
@@ -614,7 +616,7 @@ function createApp(cfg = loadConfig()) {
     const isMassage = MASSAGE_TYPES.includes(type.id);
     // Every booking gets the new-patient intake documents (private link, same token as the cancel link)
     const intakeUrl = cfg.siteUrl ? `${cfg.siteUrl}/intake?id=${appt.id}&token=${appt.cancelToken}` : "";
-    const docs = packetStatus(appt);
+    const docs = packetStatus(appt, clientByEmail(store, appt.email));
     // Health details (pain areas, pain level, notes) stay out of email; they're in Admin → Appointments.
     notify.owner(`New booking: ${type.name}, ${when}`,
       [`${a.name}\n${a.email}\n${a.phone}`, `${type.name} (${type.minutes} min)\n${when}`,
@@ -623,7 +625,8 @@ function createApp(cfg = loadConfig()) {
     notify.client(a.email, `You're booked: ${type.name}, ${when}`,
       `Hi ${a.name.split(" ")[0]},\n\nYou're booked at ${biz.name} for ${type.name} (${type.minutes} min) on ${when}.\n\n` +
       `${biz.address}\n${biz.phone}\n\n` +
-      (intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
+      (docs.complete ? `Your intake documents are on file, so there's nothing to fill out before this visit.\n\n`
+        : intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total - docs.done} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
       (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
         : type.remote ? `This visit is on video. Dr. Jared will send you a secure meeting link before your appointment. Please join from a quiet, private room so you can show the movements he asks about.`
         : `Please wear comfortable clothes you can move in.`) +
@@ -631,7 +634,7 @@ function createApp(cfg = loadConfig()) {
 
     res.status(201).json({
       ok: true,
-      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, intake: true, intakeDocs: docs.total },
+      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, intake: true, intakeDocs: docs.total - docs.done, intakeDone: docs.complete },
       message: `You're booked: ${type.name}, ${when}.`
     });
   });
@@ -861,9 +864,10 @@ function createApp(cfg = loadConfig()) {
   admin.get("/appointments", (req, res) => {
     const { date: today } = nowParts(cfg.tz, cfg.now());
     const all = req.query.all === "1";
+    const byEmail = new Map(store.read("clients", []).map((c) => [c.email, c]));
     res.json(appointments().filter((a) => all || (a.date >= today && a.status !== "cancelled"))
       .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1) * (all ? -1 : 1))
-      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a) })));
+      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, byEmail.get(a.email)) })));
   });
   admin.patch("/appointments/:id", async (req, res) => {
     const list = appointments();
@@ -1073,7 +1077,7 @@ function createApp(cfg = loadConfig()) {
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
-  mountIntake({ app, admin, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
+  mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   mountAnalytics({ app, admin, store, limiter });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)

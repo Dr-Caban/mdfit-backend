@@ -643,3 +643,46 @@ test("leaderboard: today, this week, this month and all time, each with when it 
   assert.ok(r.xp > r.monthXp && r.monthXp > 0, `lifetime ${r.xp} > month ${r.monthXp} > 0`);
   assert.equal(r.todayXp, 0);
 });
+
+test("become a patient: documents filled from the dashboard stay on file and count for every visit", async (t) => {
+  const s = await start(); t.after(s.close);
+  assert.equal((await s.call("GET", "/api/me/intake")).status, 401, "signed-in members only");
+  const tok = (await signup(s)).body.token;
+  const p = (await s.call("GET", "/api/me/intake", undefined, tok)).body;
+  assert.deepEqual(p.docs.map((d) => d.id), ["info", "pain", "history", "consent"]);
+  assert.equal(p.prefill.email, "pat@example.com"); assert.equal(p.completed, 0); assert.equal(p.done, false);
+  const save = (doc, body) => s.call("POST", `/api/me/intake/${doc}`, body, tok);
+  assert.equal((await save("massage", {})).status, 404, "massage preferences are per visit, not on file");
+  assert.equal((await save("info", { name: "Pat Doe" })).status, 400, "required fields enforced");
+  assert.equal((await save("info", { name: "Pat Doe", dob: "1980-02-03", phone: "941-555-0100", email: "pat@example.com", emergencyName: "Sam Doe", emergencyPhone: "941-555-0199" })).status, 201);
+  assert.equal((await save("pain", { complaint: "Left hip aches after runs", areas: ["Left hip"], started: "6 weeks to 3 months ago", painNow: 4, goals: "Run a 10k" })).status, 201);
+  assert.equal((await save("history", { redFlags: "No" })).status, 201);
+  const last = await save("consent", { treatment: true, privacy: true, financial: true, signature: "Pat Doe" });
+  assert.deepEqual(last.body, { ok: true, total: 4, completed: 4, done: true });
+  const again = await s.call("GET", "/api/me/intake", undefined, tok);
+  assert.equal(again.body.done, true);
+  assert.ok(!JSON.stringify(again.body).includes("Left hip aches"), "answers are never sent back out");
+  assert.ok(!fs.readFileSync(path.join(s.dataDir, "intakes.json"), "utf8").includes("Left hip aches"), "encrypted at rest");
+
+  // a later booking with the same email has nothing left to fill (evaluation), or only the massage form (massage)
+  const ev = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "10:00", name: "Pat Doe", email: "PAT@example.com", phone: "941-555-0100" });
+  assert.equal(ev.status, 201); assert.equal(ev.body.appointment.intakeDone, true); assert.equal(ev.body.appointment.intakeDocs, 0);
+  const ms = await s.call("POST", "/api/appointments", { typeId: "massage", date: "2026-11-05", time: "10:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  assert.equal(ms.body.appointment.intakeDone, false); assert.equal(ms.body.appointment.intakeDocs, 1, "only massage preferences left");
+  const link = (await s.call("GET", `/api/appointments/${ms.body.appointment.id}/intake?token=${ms.body.appointment.cancelToken}`)).body;
+  assert.deepEqual(link.docs.filter((d) => !d.done).map((d) => d.id), ["massage"], "the visit link shows the on-file documents as done");
+
+  const admin = await s.adminToken();
+  const appts = (await s.call("GET", "/api/admin/appointments", undefined, admin)).body;
+  assert.equal(appts.find((a) => a.id === ev.body.appointment.id).documents.complete, true);
+  const view = (await s.call("GET", `/api/admin/appointments/${ev.body.appointment.id}/intake`, undefined, admin)).body;
+  assert.deepEqual(view.docs.map((d) => d.title), ["Client information", "Pain Assessment Initial Intake", "Health history", "Consent & policies"]);
+  assert.ok(view.docs.every((d) => d.onFile));
+  const list = (await s.call("GET", "/api/admin/clients", undefined, admin)).body;
+  assert.equal(list[0].documents.complete, true);
+  const cid = list[0].id;
+  assert.equal((await s.call("GET", `/api/admin/clients/${cid}`, undefined, admin)).body.documents.done, 4);
+  const cv = (await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, admin)).body;
+  assert.equal(cv.docs[1].fields.find((f) => f.label === "Pain right now").value, "4/10");
+  assert.equal((await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, tok)).status, 401, "admin only");
+});
