@@ -662,6 +662,11 @@ function createApp(cfg = loadConfig()) {
     const list = appointments();
     list.push(appt);
     store.write("appointments", list);
+    // A member without a phone on file (e.g. a Google sign-up) types one to book: keep it on their account too
+    if (bookedBy && !bookedBy.phone && a.phone) {
+      const cls = store.read("clients", []), me = cls.find((x) => x.id === bookedBy.id);
+      if (me && !me.phone) { me.phone = a.phone; store.write("clients", cls); }
+    }
     activity("appointment", { email: a.email, typeId: type.id, date: a.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(a.date);
     syncBooking(appt);

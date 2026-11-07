@@ -105,3 +105,16 @@ test("feedback report status and admin notes read back; members never see the no
   assert.equal(mine.status, "working");
   assert.equal(mine.adminNotes, undefined);
 });
+
+test("a phone typed while booking is saved to a member account that had none", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: T } = (await signup(s, { phone: "" })).body;
+  assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "");
+  const r = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "09:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0177" }, T);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "941-555-0177");
+  // An existing phone is never overwritten, and an anonymous booking with the same email changes nothing
+  await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "11:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0999" }, T);
+  await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "13:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0888" });
+  assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "941-555-0177");
+});
