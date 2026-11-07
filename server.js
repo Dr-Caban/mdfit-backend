@@ -27,8 +27,7 @@ const { createCalSync } = require("./lib/calsync");
 const { createAudit } = require("./lib/audit");
 const {
   ValidationError, LEAD_STATUSES, APPT_STATUSES, GOALS, SERVICES, AREAS, DURATIONS, SURGERY, DAYS,
-  defaultSettings, leadInput, bookingInput, appointmentInput, feedbackInput, classInput, mergeSettings, EMAIL_RE
-} = require("./lib/validate");
+  defaultSettings, leadInput, bookingInput, appointmentInput, feedbackInput, classInput, mergeSettings, EMAIL_RE, meetingUrl } = require("./lib/validate");
 
 const env = (k, d = "") => (process.env[k] || d).trim();
 
@@ -601,7 +600,8 @@ function createApp(cfg = loadConfig()) {
       return res.status(409).json({ error: "That time was just taken or isn't available. Pick another." });
     const appt = {
       id: id(), ...a, typeName: type.name, minutes: type.minutes, status: "booked", adminNotes: "",
-      cancelToken: newToken(), createdAt: new Date().toISOString()
+      cancelToken: newToken(), createdAt: new Date().toISOString(),
+      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {})
     };
     if (reward) { reward.rewardUsedAt = new Date().toISOString(); appt.rewardCode = reward.rewardCode; store.write("feedback", fb); }
     const list = appointments();
@@ -628,13 +628,15 @@ function createApp(cfg = loadConfig()) {
       (docs.complete ? `Your intake documents are on file, so there's nothing to fill out before this visit.\n\n`
         : intakeUrl ? `Before your visit, please fill out your intake documents (${docs.total - docs.done} short forms, about 10 minutes). You can do them now or in parts:\n${intakeUrl}\n\n` : "") +
       (isMassage ? `Wear something comfortable; you'll be draped throughout the massage.`
-        : type.remote ? `This visit is on video. Dr. Jared will send you a secure meeting link before your appointment. Please join from a quiet, private room so you can show the movements he asks about.`
+        : type.remote ? (appt.meetingLink
+          ? `This visit is on video. Join here at your appointment time:\n${appt.meetingLink}\n\nPlease join from a quiet, private room with space to show the movements Dr. Jared asks about. The link is also in your MD Fit account under Appointments.`
+          : `This visit is on video. Dr. Jared will email you a secure meeting link before your appointment. Please join from a quiet, private room so you can show the movements he asks about.`)
         : `Please wear comfortable clothes you can move in.`) +
       (link ? `\n\nNeed to cancel? Please give at least 24 hours' notice: ${link}` : "") + `\n\n${biz.name}`);
 
     res.status(201).json({
       ok: true,
-      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, intake: true, intakeDocs: docs.total - docs.done, intakeDone: docs.complete },
+      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, meetingLink: appt.meetingLink || "", intake: true, intakeDocs: docs.total - docs.done, intakeDone: docs.complete },
       message: `You're booked: ${type.name}, ${when}.`
     });
   });
@@ -887,8 +889,19 @@ function createApp(cfg = loadConfig()) {
       if (typeof b.adminNotes !== "string" || b.adminNotes.length > 4000) return res.status(400).json({ error: "Notes must be text up to 4000 characters." });
       appt.adminNotes = b.adminNotes;
     }
+    let newLink = "";
+    if (b.meetingLink !== undefined) {
+      try { newLink = meetingUrl(b.meetingLink, "Meeting link"); } catch (err) { return res.status(400).json({ error: err.message }); }
+      if (newLink === (appt.meetingLink || "")) newLink = ""; else appt.meetingLink = newLink;
+    }
     appt.updatedAt = new Date().toISOString();
     store.write("appointments", list);
+    // A new or changed video link goes straight to the patient (no health details, just the visit and the link)
+    if (newLink && appt.status === "booked") {
+      const when = `${prettyDate(appt.date)} at ${prettyTime(appt.time)}`;
+      notify.client(appt.email, `Your video visit link: ${appt.typeName}, ${when}`,
+        `Hi ${appt.name.split(" ")[0]},\n\nHere is the link for your ${appt.typeName} on ${when}:\n${newLink}\n\nPlease join from a quiet, private room a few minutes early. The link is also in your MD Fit account under Appointments.\n\n${settings().business.name}`);
+    }
     const { cancelToken, ...out } = appt;
     res.json(out);
   });

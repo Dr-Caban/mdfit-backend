@@ -450,3 +450,33 @@ test("intake documents: every booking gets a packet; each document saves on its 
   assert.equal(sub.actor, "patient"); assert.equal(sub.subject, id);
   assert.ok(!JSON.stringify(audit).match(/Right knee|Ibuprofen|Pat Doe|pat@example/), "audit entries hold ids, never answers, names or emails");
 });
+
+test("video visits: the telehealth room link goes out with the booking; a per-visit link is emailed when it changes", async (t) => {
+  const http = require("node:http");
+  const sent = [];
+  const fake = http.createServer((req, res) => { let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => { sent.push(JSON.parse(body)); res.end("{}"); }); }).listen(0);
+  await new Promise((r) => fake.once("listening", r)); t.after(() => fake.close());
+  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>", notifyEmail: "owner@example.com", siteUrl: "https://mdfit.example.com" });
+  t.after(s.close);
+  await s.login();
+  assert.equal((await s.call("PUT", "/api/admin/settings", { booking: { telehealthUrl: "http://zoom.us/j/1" } })).status, 400, "https only");
+  assert.equal((await s.call("PUT", "/api/admin/settings", { booking: { telehealthUrl: "https://zoom.us/j/5551234567" } })).status, 200);
+  s.setToken("");
+  const v = await s.call("POST", "/api/appointments", { typeId: "eval-remote", date: "2026-11-03", time: "10:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  assert.equal(v.status, 201); assert.equal(v.body.appointment.meetingLink, "https://zoom.us/j/5551234567");
+  const inPerson = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "13:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  assert.equal(inPerson.body.appointment.meetingLink, "", "in-studio visits get no video link");
+  const wait = async (n) => { for (let i = 0; i < 400 && sent.length < n; i++) await new Promise((r) => setTimeout(r, 20)); };
+  await wait(4);
+  const conf = sent.find((m) => m.to.includes("pat@example.com") && /You're booked: Online/.test(m.subject));
+  assert.ok(conf && conf.text.includes("https://zoom.us/j/5551234567"), "confirmation carries the join link");
+  await s.login();
+  const id = v.body.appointment.id;
+  assert.equal((await s.call("PATCH", `/api/admin/appointments/${id}`, { meetingLink: "javascript:alert(1)" })).status, 400);
+  const before = sent.length;
+  assert.equal((await s.call("PATCH", `/api/admin/appointments/${id}`, { meetingLink: "https://zoom.us/j/999" })).body.meetingLink, "https://zoom.us/j/999");
+  await wait(before + 1);
+  const upd = sent.slice(before).find((m) => /Your video visit link/.test(m.subject));
+  assert.ok(upd && upd.text.includes("https://zoom.us/j/999") && upd.to.includes("pat@example.com"));
+  assert.ok(!/pain|knee|back/i.test(upd.text), "no health details");
+});
