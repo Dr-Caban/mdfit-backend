@@ -219,7 +219,7 @@ function createApp(cfg = loadConfig()) {
 
   function activity(type, detail = {}) {
     const list = store.read("activity", []);
-    list.unshift({ time: new Date().toISOString(), type, ...detail });
+    list.unshift({ time: new Date().toISOString(), ...detail, type }); // the event type wins over any detail field named "type"
     store.write("activity", list.slice(0, ACTIVITY_MAX));
     logger.info("activity", { type, ...detail, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
@@ -608,7 +608,7 @@ function createApp(cfg = loadConfig()) {
     const list = appointments();
     list.push(appt);
     store.write("appointments", list);
-    activity("appointment", { email: a.email, type: type.id, date: a.date });
+    activity("appointment", { email: a.email, typeId: type.id, date: a.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(a.date);
     syncBooking(appt);
 
@@ -919,7 +919,7 @@ function createApp(cfg = loadConfig()) {
     const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
     notify.client(c.email, `Book your ${type.name} with Dr. Jared`,
       `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
-    activity("booking_link_sent", { email: c.email, type: type.id });
+    activity("booking_link_sent", { email: c.email, typeId: type.id });
     res.json({ ok: true, link, message: `Booking link for ${type.name} emailed to ${c.name.split(" ")[0]}.` });
   });
 
