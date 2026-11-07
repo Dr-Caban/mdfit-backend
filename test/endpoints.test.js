@@ -118,3 +118,22 @@ test("a phone typed while booking is saved to a member account that had none", a
   await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "13:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0888" });
   assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "941-555-0177");
 });
+
+test("a too-short new password doesn't use up the emailed code", async (t) => {
+  const http = require("node:http");
+  const sent = [];
+  const fake = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { sent.push(JSON.parse(b)); res.end("{}"); }); }).listen(0);
+  await new Promise((r) => fake.once("listening", r));
+  t.after(() => fake.close());
+  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>" }); t.after(s.close);
+  const { token: T } = (await signup(s)).body;
+  assert.equal((await s.call("POST", "/api/me/password/code", {}, T)).status, 200);
+  let mail; for (let i = 0; i < 50 && !(mail = sent.find((m) => /is your MD Fit code/.test(m.subject))); i++) await new Promise((r) => setTimeout(r, 20));
+  const code = mail.text.match(/\b(\d{6})\b/)[1];
+  const short = await s.call("PUT", "/api/me/password", { code, password: "short" }, T);
+  assert.equal(short.status, 400);
+  assert.match(short.body.error, /at least 8/);
+  const ok = await s.call("PUT", "/api/me/password", { code, password: "long-enough-1" }, T);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "long-enough-1" })).status, 200);
+});
