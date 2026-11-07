@@ -542,7 +542,9 @@ test("embedded checkout: service and protocol endpoints return a clientSecret an
   const fake = {
     webhooks: real.webhooks,
     customers: { create: async (p) => (calls.push(["cust", p]), { id: "cus_e" }) },
-    checkout: { sessions: { create: async (p) => (calls.push(["session", p]), { id: "cs_1", url: p.ui_mode === "embedded" ? null : "https://checkout.stripe.com/x", client_secret: p.ui_mode === "embedded" ? "cs_test_secret" : null }) } }
+    prices: { list: async () => ({ data: [] }), create: async () => ({ id: "price_m" }) },
+    products: { create: async () => ({ id: "prod_m" }) },
+    checkout: { sessions: { create: async (p) => (calls.push(["session", p]), { id: "cs_1", url: p.ui_mode === "embedded_page" ? null : "https://checkout.stripe.com/x", client_secret: p.ui_mode === "embedded_page" ? "cs_test_secret" : null }) } }
   };
   const whsec = "whsec_" + require("crypto").randomBytes(16).toString("hex");
   const s = await start({ stripeClient: fake, stripeWebhookSecret: whsec }); t.after(s.close);
@@ -552,7 +554,7 @@ test("embedded checkout: service and protocol endpoints return a clientSecret an
   assert.equal(r1.status, 200);
   assert.equal(r1.body.clientSecret, "cs_test_secret");
   const svcSess = calls.filter((c) => c[0] === "session").pop()[1];
-  assert.equal(svcSess.ui_mode, "embedded");
+  assert.equal(svcSess.ui_mode, "embedded_page", "the current API name (\"embedded\" is rejected since 2026-03-25.dahlia)");
   assert.ok(svcSess.return_url.includes("checkout=success"));
   assert.equal(svcSess.payment_method_types, undefined, "dynamic payment methods (Apple Pay / Google Pay / Link / Card) via omitted payment_method_types");
   assert.equal(svcSess.mode, "payment");
@@ -562,8 +564,15 @@ test("embedded checkout: service and protocol endpoints return a clientSecret an
   assert.equal(r2.status, 200);
   assert.equal(r2.body.clientSecret, "cs_test_secret");
   const protoSess = calls.filter((c) => c[0] === "session").pop()[1];
-  assert.equal(protoSess.ui_mode, "embedded");
+  assert.equal(protoSess.ui_mode, "embedded_page");
   assert.equal(protoSess.payment_method_types, undefined);
+  // Membership checkout opens inside the app too, and comes back to the Membership tab
+  const r4 = await s.call("POST", "/api/me/checkout/membership", { tier: "member", ui: "embedded" }, tok);
+  assert.equal(r4.status, 200); assert.equal(r4.body.clientSecret, "cs_test_secret");
+  const memSess = calls.filter((c) => c[0] === "session").pop()[1];
+  assert.equal(memSess.ui_mode, "embedded_page"); assert.equal(memSess.mode, "subscription");
+  assert.equal(memSess.success_url, undefined); assert.equal(memSess.cancel_url, undefined);
+  assert.match(memSess.return_url, /\/account\?checkout=success&kind=membership&session_id=\{CHECKOUT_SESSION_ID\}#premium$/);
   // Non-embedded still works and returns a URL
   const r3 = await s.call("POST", "/api/me/checkout/service", { service: "massage" }, tok);
   assert.equal(r3.body.url, "https://checkout.stripe.com/x");
