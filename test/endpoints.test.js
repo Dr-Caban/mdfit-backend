@@ -74,3 +74,19 @@ test("admin membership save keeps the Stripe subscription on the membership", as
   await s.call("PUT", `/api/admin/clients/${client.id}/membership`, { tier: null }, A);
   assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.membership, null);
 });
+
+test("profile name change updates first and last name (Google sign-up accounts store them separately)", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: T } = (await signup(s)).body;
+  const cls = s.readJson("clients");
+  Object.assign(cls[0], { firstName: "Pat", lastName: "Doe", googleSub: "g-1" });
+  s.writeJson("clients", cls);
+  await s.call("PUT", "/api/me", { name: "Patricia Smith", phone: "941-555-0100" }, T);
+  const c = (await s.call("GET", "/api/me", undefined, T)).body.client;
+  assert.equal(c.name, "Patricia Smith");
+  assert.equal(c.firstName, "Patricia");
+  assert.equal(c.lastName, "Smith");
+  // Saving the profile with the same name keeps them
+  await s.call("PUT", "/api/me", { name: "Patricia Smith", phone: "941-555-0101" }, T);
+  assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "941-555-0101");
+});
