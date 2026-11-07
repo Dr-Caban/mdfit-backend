@@ -90,3 +90,18 @@ test("profile name change updates first and last name (Google sign-up accounts s
   await s.call("PUT", "/api/me", { name: "Patricia Smith", phone: "941-555-0101" }, T);
   assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.phone, "941-555-0101");
 });
+
+test("feedback report status and admin notes read back; members never see the notes", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken();
+  const { token: T } = (await signup(s)).body;
+  assert.equal((await s.call("POST", "/api/me/feedback-reports", { kind: "bug", title: "Chart blank", body: "The pain chart is empty", page: "/account" }, T)).status, 201);
+  const id = (await s.call("GET", "/api/admin/feedback-reports", undefined, A)).body.reports[0].id;
+  assert.equal((await s.call("PATCH", `/api/admin/feedback-reports/${id}`, { status: "working", adminNotes: "Repro on iOS" }, A)).status, 200);
+  const r = (await s.call("GET", "/api/admin/feedback-reports", undefined, A)).body.reports[0];
+  assert.equal(r.status, "working");
+  assert.equal(r.adminNotes, "Repro on iOS");
+  const mine = (await s.call("GET", "/api/me/feedback-reports", undefined, T)).body[0];
+  assert.equal(mine.status, "working");
+  assert.equal(mine.adminNotes, undefined);
+});
