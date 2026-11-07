@@ -1065,6 +1065,27 @@ function createApp(cfg = loadConfig()) {
     calsync.clear(); calWatch.sig.clear(); watchCalendar();
     res.json({ ok: true, simplepractice: u ? "configured" : "off" });
   });
+  // Busy blocks from Google Calendar / SimplePractice for the Admin calendar, as clinic-time minutes per day.
+  // Times only (no titles or names). MD Fit's own visits, which are copied to Google, are left out so they don't show twice.
+  admin.get("/busy", async (req, res) => {
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || "")) ? String(req.query.from) : nowParts(cfg.tz, cfg.now()).date;
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 42);
+    let busy = [];
+    try { busy = await calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() }); } catch { busy = []; }
+    const appts = appointments().filter((a) => a.status !== "cancelled");
+    const out = [];
+    for (let i = 0; i < days; i++) {
+      const date = addDays(from, i);
+      const own = appts.filter((a) => a.date === date).map((a) => [toMin(a.time), toMin(a.time) + (a.minutes || 60)]);
+      for (const b of busy) {
+        const [r] = busyOn(date, [b]); if (!r) continue;
+        if (String(b.source).startsWith("google") && own.some(([s0, e0]) => s0 === r[0] && e0 === r[1])) continue;
+        out.push({ date, start: r[0], end: r[1], allDay: !!b.allDay || (r[0] === 0 && r[1] === 24 * 60), source: String(b.source).startsWith("google") ? "google" : "simplepractice" });
+      }
+    }
+    res.json({ busy: out, ...calsync.status() });
+  });
+
   admin.post("/calsync/test", async (req, res) => {
     const { date } = nowParts(cfg.tz, cfg.now());
     calsync.clear();

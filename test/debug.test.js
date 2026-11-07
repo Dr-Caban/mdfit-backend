@@ -80,3 +80,28 @@ test("a program note Dr. Jared writes for a client is encrypted at rest and read
   assert.ok(!raw.includes("torn meniscus"), "not stored in plain text");
   assert.equal((await s.call("GET", "/api/me", undefined, su.token)).body.client.assignedPrograms[0].note, "Go easy on the torn meniscus");
 });
+
+test("Admin calendar busy blocks: Google and SimplePractice times, MD Fit's own Google copies left out, admin only", async (t) => {
+  const fs = require("fs"), os = require("os"), path = require("path");
+  const { createApp } = require("../server");
+  const { hashPassword } = require("../lib/auth");
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-busy-"));
+  // 10:00-11:00 and 14:00-15:00 clinic time on Nov 10 (EST = UTC-5), plus an all-day event on Nov 11
+  const busy = [
+    { start: new Date("2026-11-10T15:00:00Z"), end: new Date("2026-11-10T16:00:00Z"), source: "google" },
+    { start: new Date("2026-11-10T19:00:00Z"), end: new Date("2026-11-10T20:00:00Z"), source: "simplepractice" },
+    { allDay: true, date: "2026-11-11", source: "google" }
+  ];
+  const calsync = { busy: async () => busy, status: () => ({ google: "on" }), googleOn: () => false, clear() {}, addBooking: async () => null, removeBooking: async () => {} };
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("test-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date("2026-11-07T15:00:00Z"), calsync, calWatchMs: 0 });
+  fs.writeFileSync(path.join(dataDir, "appointments.json"), JSON.stringify([{ id: "a1", typeId: "eval", typeName: "Evaluation", date: "2026-11-10", time: "10:00", minutes: 60, status: "booked", name: "Pat", email: "p@example.com", phone: "1" }]));
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(base + "/api/admin/busy?from=2026-11-09&days=7")).status, 401);
+  const tok = (await (await fetch(base + "/api/admin/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "coach@example.com", password: "test-pass-123" }) })).json()).token;
+  const r = await (await fetch(base + "/api/admin/busy?from=2026-11-09&days=7", { headers: { authorization: "Bearer " + tok } })).json();
+  assert.deepEqual(r.busy.filter((b) => !b.allDay).map((b) => [b.date, b.start, b.end, b.source]), [["2026-11-10", 840, 900, "simplepractice"]], "the Google copy of MD Fit's 10:00 visit isn't drawn twice");
+  assert.ok(r.busy.some((b) => b.allDay && b.date === "2026-11-11"));
+  assert.ok(!JSON.stringify(r).includes("Pat"), "times only");
+});
