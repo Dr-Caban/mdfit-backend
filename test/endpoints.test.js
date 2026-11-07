@@ -232,3 +232,16 @@ test("stripe: events handled at the same time are both remembered (a retry isn't
   assert.equal((await send(paid)).duplicate, true, "Stripe's retry of the invoice is recognised");
   assert.equal((await s.call("GET", "/api/me/payments", undefined, T)).body.protocols[0].paid, 1);
 });
+
+test("scheduling a video consultation with the link left blank uses the practice's video room", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken();
+  const { token: T, client } = (await signup(s)).body;
+  const consult = (link) => s.call("POST", `/api/admin/clients/${client.id}/consult`, { date: "2026-11-05", time: "13:00", minutes: 30, meetingLink: link, message: "" }, A);
+  assert.equal((await consult("")).status, 400, "no room saved yet: asks for a link");
+  await s.call("PUT", "/api/admin/settings", { booking: { telehealthUrl: "https://zoom.us/j/777" } }, A);
+  const r = await consult("");
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const mine = (await s.call("GET", "/api/me/appointments", undefined, T)).body.upcoming.find((a) => a.id === r.body.id);
+  assert.equal(mine.meetingLink, "https://zoom.us/j/777");
+});

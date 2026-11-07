@@ -1000,7 +1000,8 @@ function createApp(cfg = loadConfig()) {
     const minutes = Number(b.minutes || 30);
     if (![15, 30, 45, 60, 90].includes(minutes)) return res.status(400).json({ error: "Length is 15, 30, 45, 60 or 90 minutes." });
     let link;
-    try { link = meetingUrl(b.meetingLink === undefined ? s.booking.telehealthUrl : b.meetingLink, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
+    // A blank link means the practice's video room
+    try { link = meetingUrl(String(b.meetingLink || "").trim() ? b.meetingLink : s.booking.telehealthUrl, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
     if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     const start = toMin(b.time), end = start + minutes;
