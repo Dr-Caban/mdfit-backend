@@ -664,10 +664,15 @@ test("become a patient: documents filled from the dashboard stay on file and cou
   assert.ok(!JSON.stringify(again.body).includes("Left hip aches"), "answers are never sent back out");
   assert.ok(!fs.readFileSync(path.join(s.dataDir, "intakes.json"), "utf8").includes("Left hip aches"), "encrypted at rest");
 
-  // a later booking with the same email has nothing left to fill (evaluation), or only the massage form (massage)
-  const ev = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "10:00", name: "Pat Doe", email: "PAT@example.com", phone: "941-555-0100" });
+  // A stranger typing Pat's email into the public form learns nothing and gets no access to Pat's documents
+  const anon = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "14:00", name: "Someone Else", email: "pat@example.com", phone: "941-555-0199" });
+  assert.equal(anon.status, 201); assert.equal(anon.body.appointment.intakeDone, false); assert.equal(anon.body.appointment.intakeDocs, 4, "an anonymous booking never reveals documents on file");
+  const anonLink = (await s.call("GET", `/api/appointments/${anon.body.appointment.id}/intake?token=${anon.body.appointment.cancelToken}`)).body;
+  assert.ok(anonLink.docs.every((d) => !d.done), "the stranger's visit link shows nothing as done");
+  // Pat's own bookings (signed in) have nothing left to fill (evaluation), or only the massage form (massage)
+  const ev = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time: "10:00", name: "Pat Doe", email: "PAT@example.com", phone: "941-555-0100" }, tok);
   assert.equal(ev.status, 201); assert.equal(ev.body.appointment.intakeDone, true); assert.equal(ev.body.appointment.intakeDocs, 0);
-  const ms = await s.call("POST", "/api/appointments", { typeId: "massage", date: "2026-11-05", time: "10:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  const ms = await s.call("POST", "/api/appointments", { typeId: "massage", date: "2026-11-05", time: "10:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" }, tok);
   assert.equal(ms.body.appointment.intakeDone, false); assert.equal(ms.body.appointment.intakeDocs, 1, "only massage preferences left");
   const link = (await s.call("GET", `/api/appointments/${ms.body.appointment.id}/intake?token=${ms.body.appointment.cancelToken}`)).body;
   assert.deepEqual(link.docs.filter((d) => !d.done).map((d) => d.id), ["massage"], "the visit link shows the on-file documents as done");
@@ -719,4 +724,17 @@ test("client type, assigned and saved programs, booking link and video consultat
   const mine = (await s.call("GET", "/api/me/appointments", undefined, tok)).body;
   const up = (mine.upcoming || mine).find((a) => a.id === c1.body.id);
   assert.ok(up && up.meetingLink === "https://zoom.us/j/1", "the consult shows in the patient's appointments with its link");
+});
+
+test("field encryption never double-wraps a value it couldn't open (wrong key)", () => {
+  const { phiStore } = require("../lib/phi");
+  const { cipher } = require("../lib/messages");
+  const mem = { data: {}, read(n, d) { return this.data[n] === undefined ? d : JSON.parse(JSON.stringify(this.data[n])); }, write(n, v) { this.data[n] = JSON.parse(JSON.stringify(v)); } };
+  const right = phiStore(mem, cipher(["key-one-0123456789"]));
+  right.write("appointments", [{ id: "a1", notes: "Left knee pain" }]);
+  const stored = mem.data.appointments[0].notes;
+  const wrong = phiStore(mem, cipher(["key-two-0123456789"]));
+  wrong.write("appointments", wrong.read("appointments", []));
+  assert.equal(mem.data.appointments[0].notes, stored, "rewritten as-is, not encrypted again");
+  assert.equal(right.read("appointments", [])[0].notes, "Left knee pain", "the right key still opens it");
 });

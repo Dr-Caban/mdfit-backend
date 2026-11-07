@@ -15,7 +15,9 @@ const { mountMessages, cipher } = require("./lib/messages");
 const { phiStore } = require("./lib/phi");
 const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
 // The account with this email (documents a patient filled from their dashboard count for every visit)
-const clientByEmail = (store, email) => store.read("clients", []).find((c) => c.email === String(email || "").toLowerCase()) || null;
+// The patient account an appointment belongs to: only set when a signed-in member booked it for themselves.
+// Never matched by email: anyone can type someone else's email into the public booking form.
+const clientOf = (store, a) => (a && a.clientId ? store.read("clients", []).find((c) => c.id === a.clientId) || null : null);
 const { mountFeedbackReports } = require("./lib/feedback-reports");
 const { mountAnalytics } = require("./lib/analytics");
 const { mountVideos } = require("./lib/videos");
@@ -599,10 +601,17 @@ function createApp(cfg = loadConfig()) {
     const busy = await calsync.busy(a.date, a.date, { icsUrl: spUrl() });
     if (!openSlots(type, a.date, s, busy).includes(a.time))
       return res.status(409).json({ error: "That time was just taken or isn't available. Pick another." });
+    // A signed-in member booking with their own email: the visit is linked to their account (documents on file count)
+    const bookedBy = (() => {
+      const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i), p = m && verifyToken(m[1], cfg.sessionSecret);
+      const c = p && p.role === "client" && store.read("clients", []).find((x) => x.id === p.sub);
+      return c && (c.pwv || 0) === p.pwv && c.email === a.email ? c : null;
+    })();
     const appt = {
       id: id(), ...a, typeName: type.name, minutes: type.minutes, status: "booked", adminNotes: "",
       cancelToken: newToken(), createdAt: new Date().toISOString(),
-      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {})
+      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {}),
+      ...(bookedBy ? { clientId: bookedBy.id } : {})
     };
     if (reward) { reward.rewardUsedAt = new Date().toISOString(); appt.rewardCode = reward.rewardCode; store.write("feedback", fb); }
     const list = appointments();
@@ -617,7 +626,7 @@ function createApp(cfg = loadConfig()) {
     const isMassage = MASSAGE_TYPES.includes(type.id);
     // Every booking gets the new-patient intake documents (private link, same token as the cancel link)
     const intakeUrl = cfg.siteUrl ? `${cfg.siteUrl}/intake?id=${appt.id}&token=${appt.cancelToken}` : "";
-    const docs = packetStatus(appt, clientByEmail(store, appt.email));
+    const docs = packetStatus(appt, clientOf(store, appt));
     // Health details (pain areas, pain level, notes) stay out of email; they're in Admin → Appointments.
     notify.owner(`New booking: ${type.name}, ${when}`,
       [`${a.name}\n${a.email}\n${a.phone}`, `${type.name} (${type.minutes} min)\n${when}`,
@@ -637,7 +646,7 @@ function createApp(cfg = loadConfig()) {
 
     res.status(201).json({
       ok: true,
-      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, meetingLink: appt.meetingLink || "", intake: true, intakeDocs: docs.total - docs.done, intakeDone: docs.complete },
+      appointment: { id: appt.id, typeId: type.id, typeName: type.name, minutes: type.minutes, date: a.date, time: a.time, cancelToken: appt.cancelToken, meetingLink: appt.meetingLink || "", intake: true, intakeDocs: bookedBy ? docs.total - docs.done : docs.total, intakeDone: !!bookedBy && docs.complete },
       message: `You're booked: ${type.name}, ${when}.`
     });
   });
@@ -867,10 +876,10 @@ function createApp(cfg = loadConfig()) {
   admin.get("/appointments", (req, res) => {
     const { date: today } = nowParts(cfg.tz, cfg.now());
     const all = req.query.all === "1";
-    const byEmail = new Map(store.read("clients", []).map((c) => [c.email, c]));
+    const byId = new Map(store.read("clients", []).map((c) => [c.id, c]));
     res.json(appointments().filter((a) => all || (a.date >= today && a.status !== "cancelled"))
       .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1) * (all ? -1 : 1))
-      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, byEmail.get(a.email)) })));
+      .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, a.clientId ? byId.get(a.clientId) : null) })));
   });
   admin.patch("/appointments/:id", async (req, res) => {
     const list = appointments();
@@ -942,7 +951,7 @@ function createApp(cfg = loadConfig()) {
     const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
     const appt = { id: id(), typeId: "consult-video", typeName, minutes, date: b.date, time: b.time, name: c.name, email: c.email, phone: c.phone || "",
       notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
-      source: "admin", meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
+      source: "admin", clientId: c.id, meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
     const list = appointments(); list.push(appt); store.write("appointments", list);
     activity("consult_scheduled", { email: c.email, date: b.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(b.date);
