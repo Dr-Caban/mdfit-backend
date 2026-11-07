@@ -258,7 +258,7 @@ function createApp(cfg = loadConfig()) {
 
   function activity(type, detail = {}) {
     const list = store.read("activity", []);
-    list.unshift({ time: new Date().toISOString(), type, ...detail });
+    list.unshift({ time: new Date().toISOString(), ...detail, type }); // the event type wins over any detail field named "type"
     store.write("activity", list.slice(0, ACTIVITY_MAX));
     logger.info("activity", { type, ...detail, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
@@ -322,6 +322,7 @@ function createApp(cfg = loadConfig()) {
       appt = { id: id(), ...fields, areas: [], painLevel: null, status: cancelled ? "cancelled" : "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString() };
       list.push(appt);
     } else {
+      if (appt.meetingLinkSetByAdmin) delete fields.meetingLink; // a link Dr. Jared set in Admin wins over Cal's on re-sync
       Object.assign(appt, fields, { updatedAt: new Date().toISOString() });
       if (cancelled) appt.status = "cancelled";
       else if (appt.status === "cancelled") appt.status = "booked";
@@ -628,7 +629,7 @@ function createApp(cfg = loadConfig()) {
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     // The free plan review is a reward: it needs an unused code from a submitted review
     let reward = null;
-    const fb = type === PLAN_REVIEW ? feedback() : null;
+    let fb = type === PLAN_REVIEW ? feedback() : null;
     if (fb) {
       const code = String((req.body && req.body.rewardCode) || "").trim().toUpperCase();
       reward = fb.find((f) => f.rewardCode === code);
@@ -636,6 +637,13 @@ function createApp(cfg = loadConfig()) {
       if (reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
     }
     const busy = await calsync.busy(a.date, a.date, { icsUrl: spUrl() });
+    // Other requests may have run while we waited for the calendar: the slot check reads appointments fresh, and the
+    // reward code is looked up again so two bookings can't both use it (and an older copy of reviews isn't written back)
+    if (fb) {
+      const code = reward.rewardCode;
+      fb = feedback(); reward = fb.find((f) => f.rewardCode === code);
+      if (!reward || reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
+    }
     if (!openSlots(type, a.date, s, busy).includes(a.time))
       return res.status(409).json({ error: "That time was just taken or isn't available. Pick another." });
     // A signed-in member booking with their own email: the visit is linked to their account (documents on file count)
@@ -654,7 +662,7 @@ function createApp(cfg = loadConfig()) {
     const list = appointments();
     list.push(appt);
     store.write("appointments", list);
-    activity("appointment", { email: a.email, type: type.id, date: a.date });
+    activity("appointment", { email: a.email, typeId: type.id, date: a.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(a.date);
     syncBooking(appt);
 
@@ -939,7 +947,7 @@ function createApp(cfg = loadConfig()) {
     let newLink = "";
     if (b.meetingLink !== undefined) {
       try { newLink = meetingUrl(b.meetingLink, "Meeting link"); } catch (err) { return res.status(400).json({ error: err.message }); }
-      if (newLink === (appt.meetingLink || "")) newLink = ""; else appt.meetingLink = newLink;
+      if (newLink === (appt.meetingLink || "")) newLink = ""; else { appt.meetingLink = newLink; appt.meetingLinkSetByAdmin = true; }
     }
     appt.updatedAt = new Date().toISOString();
     store.write("appointments", list);
@@ -970,13 +978,13 @@ function createApp(cfg = loadConfig()) {
       `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n` +
       (type.remote ? `This visit is on video. At your appointment time, join here:\n${room}\n(The link is also in your booking confirmation and your MD Fit account.)\n\n` : "") +
       `${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
-    activity("booking_link_sent", { email: c.email, type: type.id });
+    activity("booking_link_sent", { email: c.email, typeId: type.id });
     res.json({ ok: true, link, message: `Booking link for ${type.name} emailed to ${c.name.split(" ")[0]}.` });
   });
 
   // Dr. Jared books the consultation himself: no payment (inpatients never pay; outpatient fees are settled outside
   // this flow), the video link goes to the patient right away, the slot is blocked and it lands on Google Calendar.
-  admin.post("/clients/:id/consult", (req, res) => {
+  admin.post("/clients/:id/consult", async (req, res) => {
     const c = clientById(req.params.id);
     if (!c) return res.status(404).json({ error: "Client not found." });
     const b = req.body || {}, s = settings();
@@ -988,6 +996,13 @@ function createApp(cfg = loadConfig()) {
     if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     const start = toMin(b.time), end = start + minutes;
+    const now = nowParts(cfg.tz, cfg.now());
+    if (b.date + b.time <= now.date + now.time) return res.status(400).json({ error: "That time has already passed. Pick a time in the future." });
+    // Dr. Jared's Google Calendar / SimplePractice busy blocks count too (read before the appointment check, so a
+    // booking that lands while we wait is still caught)
+    const busy = await calsync.busy(b.date, b.date, { icsUrl: spUrl() });
+    const block = busyOn(b.date, busy).find(([s0, e0]) => s0 < end && e0 > start);
+    if (block && !b.force) return res.status(409).json({ error: "That overlaps something on your calendar (Google Calendar or SimplePractice). Pick another time." });
     const clash = appointments().find((a) => a.date === b.date && a.status === "booked" && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
     if (clash && !b.force) return res.status(409).json({ error: `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
     const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
