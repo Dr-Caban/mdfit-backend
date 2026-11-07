@@ -738,3 +738,22 @@ test("field encryption never double-wraps a value it couldn't open (wrong key)",
   assert.equal(mem.data.appointments[0].notes, stored, "rewritten as-is, not encrypted again");
   assert.equal(right.read("appointments", [])[0].notes, "Left knee pain", "the right key still opens it");
 });
+
+test("forms filled from a visit's intake link show on the client's Admin profile (owner only)", async (t) => {
+  const s = await start(); t.after(s.close);
+  const tok = (await signup(s)).body.token;
+  const b = await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-10", time: "10:30", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  const { id, cancelToken: token } = b.body.appointment;
+  const save = (doc, body) => s.call("POST", `/api/appointments/${id}/intake/${doc}`, { token, ...body });
+  await save("info", { name: "Pat Doe", dob: "1980-02-03", phone: "941-555-0100", email: "pat@example.com", emergencyName: "Sam Doe", emergencyPhone: "941-555-0199" });
+  await save("pain", { complaint: "Knee", areas: ["Right knee"], started: "2 to 6 weeks ago", painNow: 3, goals: "Walk" });
+  await save("history", { redFlags: "No" });
+  assert.equal((await save("consent", { treatment: true, privacy: true, financial: true, signature: "Pat Doe" })).body.done, true);
+  const admin = await s.adminToken();
+  const cid = (await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].id;
+  assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].documents.done, 4);
+  assert.equal((await s.call("GET", `/api/admin/clients/${cid}`, undefined, admin)).body.documents.complete, true);
+  const cv = (await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, admin));
+  assert.equal(cv.status, 200); assert.equal(cv.body.docs.length, 4);
+  assert.equal((await s.call("GET", "/api/me/intake", undefined, tok)).body.completed, 0, "the member side never credits a booking by email");
+});
