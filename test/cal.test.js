@@ -215,3 +215,17 @@ test("Cal video link: the per-booking Meet / Cal Video / Zoom link is kept on th
   assert.equal(normaliseBooking(calBooking({ location: "integrations:daily" })).meetingLink, "", "a location code is not a link");
   assert.equal(normaliseBooking(calBooking({ location: "javascript:alert(1)" })).meetingLink, "");
 });
+
+test("a video link Dr. Jared sets in Admin survives Cal webhooks and re-syncs", async (t) => {
+  const s = await start(null); t.after(s.close);
+  await s.hook({ triggerEvent: "BOOKING_CREATED", payload: calBooking({ meetingUrl: "https://app.cal.com/video/one" }) });
+  await s.login();
+  const a = (await s.call("GET", "/api/admin/appointments")).body[0];
+  assert.equal(a.meetingLink, "https://app.cal.com/video/one");
+  // Cal's own link can still change while the admin hasn't touched it
+  await s.hook({ triggerEvent: "BOOKING_CREATED", payload: calBooking({ meetingUrl: "https://app.cal.com/video/two" }) });
+  assert.equal((await s.call("GET", "/api/admin/appointments")).body[0].meetingLink, "https://app.cal.com/video/two");
+  assert.equal((await s.call("PATCH", `/api/admin/appointments/${a.id}`, { meetingLink: "https://zoom.us/j/999" })).status, 200);
+  await s.hook({ triggerEvent: "BOOKING_CREATED", payload: calBooking({ meetingUrl: "https://app.cal.com/video/three", additionalNotes: "x" }) });
+  assert.equal((await s.call("GET", "/api/admin/appointments")).body[0].meetingLink, "https://zoom.us/j/999");
+});

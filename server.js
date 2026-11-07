@@ -285,6 +285,7 @@ function createApp(cfg = loadConfig()) {
       appt = { id: id(), ...fields, areas: [], painLevel: null, status: cancelled ? "cancelled" : "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString() };
       list.push(appt);
     } else {
+      if (appt.meetingLinkSetByAdmin) delete fields.meetingLink; // a link Dr. Jared set in Admin wins over Cal's on re-sync
       Object.assign(appt, fields, { updatedAt: new Date().toISOString() });
       if (cancelled) appt.status = "cancelled";
       else if (appt.status === "cancelled") appt.status = "booked";
@@ -909,7 +910,7 @@ function createApp(cfg = loadConfig()) {
     let newLink = "";
     if (b.meetingLink !== undefined) {
       try { newLink = meetingUrl(b.meetingLink, "Meeting link"); } catch (err) { return res.status(400).json({ error: err.message }); }
-      if (newLink === (appt.meetingLink || "")) newLink = ""; else appt.meetingLink = newLink;
+      if (newLink === (appt.meetingLink || "")) newLink = ""; else { appt.meetingLink = newLink; appt.meetingLinkSetByAdmin = true; }
     }
     appt.updatedAt = new Date().toISOString();
     store.write("appointments", list);
