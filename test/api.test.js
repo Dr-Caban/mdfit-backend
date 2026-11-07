@@ -341,7 +341,7 @@ test("services, payment plans and Medical Massage are public and admin-editable"
   assert.ok(site.options.services.includes("Medical massage"));
   assert.ok(!site.options.services.includes("Group classes"), "classes are off the public site for now");
   const types = Object.fromEntries(site.settings.appointmentTypes.map((a) => [a.id, a.minutes]));
-  assert.deepEqual(types, { eval: 90, "eval-remote": 60, session: 60, "session-remote": 60, "followup-remote": 45, massage: 60, massage90: 90, call: 15 });
+  assert.deepEqual(types, { eval: 90, "eval-remote": 60, session: 60, "session-remote": 60, "followup-remote": 30, massage: 60, massage90: 90, call: 15 });
   await s.login();
   const r = await s.call("PUT", "/api/admin/settings", { services: [...site.settings.services, { id: "dry-needling", name: "Dry Needling", rate: 180, protocol: true, description: "" }], plans: { gold: 25 } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -479,4 +479,24 @@ test("video visits: the telehealth room link goes out with the booking; a per-vi
   const upd = sent.slice(before).find((m) => /Your video visit link/.test(m.subject));
   assert.ok(upd && upd.text.includes("https://zoom.us/j/999") && upd.to.includes("pat@example.com"));
   assert.ok(!/pain|knee|back/i.test(upd.text), "no health details");
+});
+
+test("telehealth prices: saved old defaults move to $150 evaluation and 30-minute $80 follow-up, once; custom values stay", async () => {
+  const fs2 = require("fs"), os2 = require("os"), path2 = require("path");
+  const dataDir = fs2.mkdtempSync(path2.join(os2.tmpdir(), "mdfit-price-"));
+  const { createStore } = require("../lib/store");
+  const st = createStore(dataDir);
+  const types = require("../lib/validate").defaultSettings().appointmentTypes.map((t) => ({ ...t }));
+  const ev = types.find((t) => t.id === "eval-remote"), fu = types.find((t) => t.id === "followup-remote");
+  ev.description = "A video evaluation with Dr. Jared when you can't come in. $300."; fu.minutes = 45; fu.description = "A remote check-in by video. $150.";
+  const sess = types.find((t) => t.id === "session-remote"); sess.description = "Custom text $300.";
+  st.write("settings", { version: 3, appointmentTypes: types, services: [{ id: "eval-remote", rate: 300, unit: "60 minutes" }, { id: "followup-remote", rate: 150, unit: "45 minutes" }] });
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword(PASSWORD), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => NOW });
+  const saved = createStore(dataDir).read("settings", {});
+  const e2 = saved.appointmentTypes.find((t) => t.id === "eval-remote"), f2 = saved.appointmentTypes.find((t) => t.id === "followup-remote");
+  assert.match(e2.description, /\$150\./); assert.equal(f2.minutes, 30); assert.match(f2.description, /\$80\./);
+  assert.equal(saved.services.find((v) => v.id === "eval-remote").rate, 150); assert.equal(saved.services.find((v) => v.id === "followup-remote").rate, 80);
+  assert.equal(saved.appointmentTypes.find((t) => t.id === "session-remote").description, "Custom text $300.", "other types untouched");
+  assert.equal(saved.telehealthPrices2026, true);
+  fs2.rmSync(dataDir, { recursive: true, force: true }); void app;
 });
