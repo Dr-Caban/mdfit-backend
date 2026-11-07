@@ -56,3 +56,21 @@ test("a built-in program added after the admin last saved content can be pinned 
   await s.call("PUT", "/api/admin/content", { programs: (await s.call("GET", "/api/admin/content", undefined, A)).body.programs.filter((p) => p.id !== gone) }, A);
   assert.equal((await s.call("PUT", `/api/me/pinned/${gone}`, undefined, T)).status, 400);
 });
+
+test("admin membership save keeps the Stripe subscription on the membership", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken();
+  const { token: T, client } = (await signup(s)).body;
+  const cls = s.readJson("clients");
+  cls[0].membership = { tier: "member", since: "2026-10-01", until: "2026-12-01", stripeSubscriptionId: "sub_123", status: "active", cancelAtPeriodEnd: false };
+  s.writeJson("clients", cls);
+  const r = await s.call("PUT", `/api/admin/clients/${client.id}/membership`, { tier: "member", until: "2027-01-01" }, A);
+  assert.equal(r.status, 200);
+  const m = (await s.call("GET", "/api/me/payments", undefined, T)).body.membership;
+  assert.equal(m.until, "2027-01-01");
+  assert.equal(m.since, "2026-10-01");
+  assert.equal(m.stripeSubscriptionId, "sub_123");
+  // Turning it off still clears it
+  await s.call("PUT", `/api/admin/clients/${client.id}/membership`, { tier: null }, A);
+  assert.equal((await s.call("GET", "/api/me", undefined, T)).body.client.membership, null);
+});
