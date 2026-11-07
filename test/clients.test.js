@@ -596,7 +596,7 @@ test("password codes: forgot by email, Google user sets first password, change w
   const fake = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { sent.push(JSON.parse(b)); res.end("{}"); }); }).listen(0);
   await new Promise((r) => fake.once("listening", r));
   t.after(() => fake.close());
-  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>" }); t.after(s.close);
+  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>", notifyGapMs: 0 }); t.after(s.close);
   const codeMails = () => sent.filter((m) => /is your MD Fit code/.test(m.subject));
   const lastCode = async (n) => { for (let i = 0; i < 50 && codeMails().length < n; i++) await new Promise((r) => setTimeout(r, 20)); const m = codeMails().pop(); return m.text.match(/\b(\d{6})\b/)[1]; };
 
@@ -808,4 +808,75 @@ test("health tips: built-in articles, older saved tips get them by id, admin sav
   const own = c.recommendations.map((r, i) => (i === 2 ? { ...r, sections: [{ type: "list", heading: "Daily", style: "check", items: ["Water", { title: "Walk", detail: "20 min" }] }] } : r));
   const saved = (await s.call("PUT", "/api/admin/content", { recommendations: own }, adm)).body.recommendations;
   assert.deepEqual(saved[2].sections, own[2].sections, "a custom tip's own article is stored as sent");
+});
+
+// Emails the owner asked for (Nov 2026): a welcome note on every signup, and a receipt when someone becomes a paying member
+const fakeResend = async (t) => {
+  const http = require("node:http"), sent = [];
+  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { sent.push(JSON.parse(b)); res.end("{}"); }); }).listen(0);
+  await new Promise((r) => srv.once("listening", r));
+  t.after(() => srv.close());
+  const waitFor = async (re, n = 1) => { for (let i = 0; i < 100 && sent.filter((m) => re.test(m.subject)).length < n; i++) await new Promise((r) => setTimeout(r, 20)); return sent.filter((m) => re.test(m.subject)); };
+  return { sent, waitFor, cfg: { resendKey: "re_test", resendUrl: `http://127.0.0.1:${srv.address().port}`, notifyFrom: "MD Fit <hello@example.com>" } };
+};
+
+test("every new account gets a welcome email from the app (password, Google-style auto-create)", async (t) => {
+  const mail = await fakeResend(t);
+  const s = await start(mail.cfg); t.after(s.close);
+  await signup(s);
+  const [w] = await mail.waitFor(/^Welcome to MD Fit$/);
+  assert.ok(w, "welcome email sent");
+  assert.deepEqual(w.to, ["pat@example.com"]);
+  assert.match(w.text, /Hi Pat,/);
+  assert.match(w.text, /\/account/); assert.match(w.text, /\/intake\?me=1/); assert.match(w.text, /\/book/);
+  assert.ok(!/pain|diagnos|injur/i.test(w.text), "no health details in the welcome");
+  // the owner still gets the new-account alert, separately
+  assert.equal((await mail.waitFor(/^New client account: Pat Doe$/)).length, 1);
+  // an account auto-created at login gets one too
+  await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "lee-pass-123", name: "Lee Park", create: true });
+  const welcomes = await mail.waitFor(/^Welcome to MD Fit$/, 2);
+  if (welcomes.length === 2) assert.deepEqual(welcomes[1].to, ["lee@example.com"]);
+});
+
+test("paying members get a receipt: on the first payment and on each monthly renewal, never twice for one invoice", async (t) => {
+  const Stripe = require("stripe");
+  const real = new Stripe("sk_test_fake", { apiVersion: "2026-10-28.endive" });
+  const fake = {
+    webhooks: real.webhooks,
+    customers: { create: async () => ({ id: "cus_r" }) },
+    prices: { list: async () => ({ data: [] }), create: async () => ({ id: "price_r" }) },
+    products: { create: async () => ({ id: "prod_r" }) },
+    checkout: { sessions: { create: async () => ({ id: "cs_r", url: "https://checkout.stripe.com/c/pay/cs_r" }) } }
+  };
+  const mail = await fakeResend(t);
+  const whsec = "whsec_receipt_test";
+  const s = await start({ ...mail.cfg, stripeClient: fake, stripeWebhookSecret: whsec }); t.after(s.close);
+  const send = async (ev) => {
+    const payload = JSON.stringify(ev);
+    const header = real.webhooks.generateTestHeaderString({ payload, secret: whsec });
+    const r = await fetch(s.base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": header }, body: payload });
+    return { status: r.status, body: await r.json() };
+  };
+  const tok = (await signup(s)).body.token;
+  await mail.waitFor(/^Welcome to MD Fit$/);
+  assert.equal((await s.call("POST", "/api/me/checkout/membership", { tier: "premium" }, tok)).status, 200); // links cus_r to Pat
+  const me = (await s.call("GET", "/api/me", undefined, tok)).body.client;
+  // first payment
+  assert.equal((await send({ id: "evt_r1", created: 1794000000, type: "checkout.session.completed", data: { object: { id: "cs_r", mode: "subscription", payment_status: "paid", customer: "cus_r", client_reference_id: me.id, amount_total: 20000, currency: "usd", subscription: "sub_r", metadata: { kind: "membership", tier: "premium", clientId: me.id } } } })).status, 200);
+  const [first] = await mail.waitFor(/your MD Fit receipt/);
+  assert.ok(first, "receipt sent on the first payment");
+  assert.equal(first.subject, "Welcome to Premium 1-on-1: your MD Fit receipt");
+  assert.deepEqual(first.to, ["pat@example.com"]);
+  assert.match(first.text, /Premium 1-on-1: \$200\.00/); assert.match(first.text, /Paid November \d+, 2026/); assert.match(first.text, /Manage billing/);
+  // the subscription is recorded, then the first invoice.paid (subscription_create) must NOT send a second receipt
+  await send({ id: "evt_r2", type: "customer.subscription.created", data: { object: { id: "sub_r", customer: "cus_r", status: "active", metadata: { kind: "membership", tier: "premium" }, items: { data: [{ current_period_end: 1796600000 }] } } } });
+  await send({ id: "evt_r3", type: "invoice.paid", data: { object: { id: "in_r1", customer: "cus_r", billing_reason: "subscription_create", amount_paid: 20000, currency: "usd", parent: { subscription_details: { subscription: "sub_r" } } } } });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(mail.sent.filter((m) => /receipt/.test(m.subject)).length, 1, "one receipt for the first month");
+  // a monthly renewal sends a receipt with the invoice number and link
+  await send({ id: "evt_r4", created: 1796700000, type: "invoice.paid", data: { object: { id: "in_r2", number: "MDFIT-0002", hosted_invoice_url: "https://invoice.stripe.com/i/abc", customer: "cus_r", billing_reason: "subscription_cycle", amount_paid: 20000, currency: "usd", status_transitions: { paid_at: 1796700000 }, parent: { subscription_details: { subscription: "sub_r" } } } } });
+  const renewals = await mail.waitFor(/^Your MD Fit receipt: Premium 1-on-1$/);
+  assert.equal(renewals.length, 1);
+  assert.match(renewals[0].text, /Invoice MDFIT-0002/); assert.match(renewals[0].text, /https:\/\/invoice\.stripe\.com\/i\/abc/); assert.match(renewals[0].text, /\$200\.00/);
+  assert.ok(!/pain|diagnos/i.test(renewals[0].text), "no health details on a receipt");
 });

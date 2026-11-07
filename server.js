@@ -135,7 +135,7 @@ function createApp(cfg = loadConfig()) {
     d.days = Object.fromEntries(Object.entries(d.days).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, EMAIL_LOG_DAYS));
     store.write("email-log", d);
   }
-  const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, alertEmails: cfg.alertEmails || [], apiUrl: cfg.resendUrl, onResult: logEmail });
+  const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, alertEmails: cfg.alertEmails || [], apiUrl: cfg.resendUrl, minGapMs: cfg.notifyGapMs, onResult: logEmail });
   const cal = createCal({ apiKey: cfg.calKey, apiUrl: cfg.calUrl });
   const places = createPlaces({ apiKey: cfg.googleKey, baseUrl: cfg.googleUrl, legacyUrl: cfg.googleLegacyUrl });
 

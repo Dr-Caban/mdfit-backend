@@ -125,7 +125,7 @@ test("a too-short new password doesn't use up the emailed code", async (t) => {
   const fake = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { sent.push(JSON.parse(b)); res.end("{}"); }); }).listen(0);
   await new Promise((r) => fake.once("listening", r));
   t.after(() => fake.close());
-  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>" }); t.after(s.close);
+  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${fake.address().port}`, notifyFrom: "MD Fit <hello@example.com>", notifyGapMs: 0 }); t.after(s.close);
   const { token: T } = (await signup(s)).body;
   assert.equal((await s.call("POST", "/api/me/password/code", {}, T)).status, 200);
   let mail; for (let i = 0; i < 50 && !(mail = sent.find((m) => /is your MD Fit code/.test(m.subject))); i++) await new Promise((r) => setTimeout(r, 20));

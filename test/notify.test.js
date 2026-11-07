@@ -81,6 +81,8 @@ test("group message: every notice is emailed despite the rate limit; reminders g
   const adm = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
   const waitIdle = async () => { for (let i = 0; i < 100; i++) { const b = (await call("GET", "/api/admin/messages/broadcasts", undefined, adm)).body; if (b.every((x) => !x.sending)) return b; await new Promise((r) => setTimeout(r, 100)); } throw new Error("still sending"); };
   await waitIdle(); // signup allows 10 accounts/hour per IP, so 9 members
+  // each signup also queues a welcome email; let those drain (600 ms apart) so the broadcast timing below is about the broadcast
+  for (let i = 0; i < 300 && f.emails.filter((e) => e.subject === "Welcome to MD Fit").length < 9; i++) await new Promise((r) => setTimeout(r, 100));
   const r = await call("POST", "/api/admin/messages/broadcast", { to: "all", body: "Clinic closed Thanksgiving." }, adm);
   assert.equal(r.status, 201); assert.equal(r.body.sent, 9);
   const [g] = await waitIdle();
