@@ -777,3 +777,34 @@ test("a glitchy watch reading is dropped, not the whole workout", async (t) => {
   assert.ok(JSON.stringify(w).includes("Run") || r.body);
   assert.equal(r.body.workout ? r.body.workout.hrMax : undefined, undefined, "the 262 bpm spike isn't kept");
 });
+
+test("health tips: built-in articles, older saved tips get them by id, admin saves keep and check sections", async (t) => {
+  const s = await start(); t.after(s.close);
+  const pub = (await s.call("GET", "/api/content")).body;
+  assert.ok(pub.recommendations.length >= 6 && pub.recommendations.every((r) => r.image && Array.isArray(r.sections) && r.sections.length), "every built-in tip has its poster and an article");
+  // Saved before articles existed: old built-in wording, one admin-edited text, one admin-added tip without a poster
+  fs.writeFileSync(path.join(s.dataDir, "content.json"), JSON.stringify({ contentVersion: 5, recommendations: [
+    { id: "psg-protocol", area: "Recovery", title: "PSG protocol", body: "Dr. Jared's proprietary PSG recovery protocol for post-session recovery and inflammation management.", image: "1Nigi9UOTm14KAzHS6hOb9KQKEOXVH-Xs", link: "" },
+    { id: "diet-health-shots", area: "Nutrition", title: "My diet notes", body: "Edited by the admin.", image: "1P-5bng8Pg3Yatz5jE-KOWDfTDBWgh5Hu", link: "" },
+    { id: "custom-tip", area: "Wellness", title: "Drink water", body: "Eight glasses.", image: "", link: "" }
+  ] }));
+  const recs = (await s.call("GET", "/api/content")).body.recommendations;
+  assert.deepEqual(recs.map((r) => r.id), ["psg-protocol", "diet-health-shots", "custom-tip"], "the saved list and order win");
+  const psg = recs[0], diet = recs[1];
+  assert.equal(psg.title, "State of Perpetual Growth (PSG) program", "old built-in wording moves to the poster's wording");
+  assert.equal(psg.area, "Recovery", "admin fields stay");
+  assert.ok(psg.sections.length > 5 && diet.sections.length > 5, "built-in article merged in by id");
+  assert.equal(diet.title, "My diet notes"); assert.equal(diet.body, "Edited by the admin.");
+  assert.equal(recs[2].sections, undefined, "a custom tip stays a plain card");
+  // Admin round trip keeps the articles; a bad block is refused
+  const adm = await s.adminToken();
+  const c = (await s.call("GET", "/api/admin/content", undefined, adm)).body;
+  const ok = await s.call("PUT", "/api/admin/content", { recommendations: c.recommendations }, adm);
+  assert.equal(ok.status, 200, ok.body && ok.body.error);
+  assert.deepEqual(ok.body.recommendations, c.recommendations);
+  const bad = c.recommendations.map((r, i) => (i ? r : { ...r, sections: [{ type: "script", text: "x" }] }));
+  assert.equal((await s.call("PUT", "/api/admin/content", { recommendations: bad }, adm)).status, 400);
+  const own = c.recommendations.map((r, i) => (i === 2 ? { ...r, sections: [{ type: "list", heading: "Daily", style: "check", items: ["Water", { title: "Walk", detail: "20 min" }] }] } : r));
+  const saved = (await s.call("PUT", "/api/admin/content", { recommendations: own }, adm)).body.recommendations;
+  assert.deepEqual(saved[2].sections, own[2].sections, "a custom tip's own article is stored as sent");
+});
