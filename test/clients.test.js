@@ -212,8 +212,8 @@ test("rewards math: XP, gem levels and badge dates", () => {
   }, "2026-03-05");
   // 3 x 30 workouts (flat, no streak bonus), 10 pain, 50 visit, plus 5 badges x 25 bonus
   assert.equal(r.xp, 275);
-  assert.equal(r.level, 2); assert.equal(r.title, "Garnet");
-  assert.equal(r.rank.current.name, "Garnet"); assert.equal(r.rank.next.name, "Onyx"); assert.equal(r.rank.xpToNext, 226);
+  assert.equal(r.level, 2); assert.equal(r.title, "Amber");
+  assert.equal(r.rank.current.name, "Amber"); assert.equal(r.rank.next.name, "Amethyst"); assert.equal(r.rank.xpToNext, 226);
   assert.equal(r.todayXp, 75);
   const b = Object.fromEntries(r.badges.map((x) => [x.id, x]));
   assert.equal(b["first-workout"].earnedOn, "2026-03-02");
