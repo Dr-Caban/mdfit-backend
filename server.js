@@ -14,6 +14,7 @@ const { mountContent } = require("./lib/content");
 const { mountMessages, cipher } = require("./lib/messages");
 const { phiStore } = require("./lib/phi");
 const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
+const { mountHipaa } = require("./lib/hipaa");
 // The account with this email (documents a patient filled from their dashboard count for every visit)
 const clientByEmail = (store, email) => store.read("clients", []).find((c) => c.email === String(email || "").toLowerCase()) || null;
 const { mountFeedbackReports } = require("./lib/feedback-reports");
@@ -1078,6 +1079,7 @@ function createApp(cfg = loadConfig()) {
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
+  mountHipaa({ app, admin, store, cfg, notify, activity, limiter, audit, appointments, ...cl });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   mountAnalytics({ app, admin, store, limiter });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
