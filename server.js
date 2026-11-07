@@ -276,7 +276,8 @@ function createApp(cfg = loadConfig()) {
     const cancelled = statusOverride === "cancelled" || ["cancelled", "rejected"].includes(b.status);
     const fields = {
       source: "cal", calUid: b.uid, typeId: b.eventSlug || "cal", typeName: b.title, minutes: b.minutes || 60,
-      date: local.date, time: local.time, name: b.name, email: b.email, phone: b.phone, notes: b.notes
+      date: local.date, time: local.time, name: b.name, email: b.email, phone: b.phone, notes: b.notes,
+      ...(b.meetingLink ? { meetingLink: b.meetingLink } : {}) // Cal's per-booking video link: shown in the patient's account and Admin
     };
     if (!appt) {
       appt = { id: id(), ...fields, areas: [], painLevel: null, status: cancelled ? "cancelled" : "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString() };

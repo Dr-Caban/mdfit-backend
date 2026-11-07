@@ -206,3 +206,12 @@ test("bad API key gives a clear message", async (t) => {
   assert.equal(st.connected, false);
   assert.match(st.message, /rejected the API key/);
 });
+
+test("Cal video link: the per-booking Meet / Cal Video / Zoom link is kept on the appointment", async () => {
+  const { normaliseBooking } = require("../lib/cal");
+  assert.equal(normaliseBooking(calBooking({ metadata: { videoCallUrl: "https://app.cal.com/video/abc" } })).meetingLink, "https://app.cal.com/video/abc");
+  assert.equal(normaliseBooking(calBooking({ location: "integrations:google:meet", references: [{ type: "google_meet_video", meetingUrl: "https://meet.google.com/abc-defg-hij" }] })).meetingLink, "https://meet.google.com/abc-defg-hij");
+  assert.equal(normaliseBooking(calBooking({ meetingUrl: "https://zoom.us/j/123" })).meetingLink, "https://zoom.us/j/123");
+  assert.equal(normaliseBooking(calBooking({ location: "integrations:daily" })).meetingLink, "", "a location code is not a link");
+  assert.equal(normaliseBooking(calBooking({ location: "javascript:alert(1)" })).meetingLink, "");
+});
