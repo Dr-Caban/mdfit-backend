@@ -69,3 +69,14 @@ test("booking race: while the calendar is read, a reward code can't be used twic
   const both = await Promise.all(["a", "b"].map((x) => s.call("POST", "/api/appointments", { typeId: "session", date: day.date, time: "15:00", name: "Sam Lee", email: `${x}@example.com`, phone: "941-555-0177" })));
   assert.deepEqual(both.map((x) => x.status).sort(), [201, 409]);
 });
+
+test("a program note Dr. Jared writes for a client is encrypted at rest and reads back as written", async (t) => {
+  const s = await start(); t.after(s.close);
+  const admin = await s.adminToken();
+  const su = (await s.call("POST", "/api/clients/signup", { name: "Josh Lerner", email: "josh@example.com", phone: "941-555-0123", password: "member-pass-123" })).body;
+  const pid = (await s.call("GET", "/api/me/content", undefined, su.token)).body.programs[0].id;
+  assert.equal((await s.call("PUT", `/api/admin/clients/${su.client.id}/programs`, { programs: [{ id: pid, note: "Go easy on the torn meniscus" }] }, admin)).status, 200);
+  const raw = fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8");
+  assert.ok(!raw.includes("torn meniscus"), "not stored in plain text");
+  assert.equal((await s.call("GET", "/api/me", undefined, su.token)).body.client.assignedPrograms[0].note, "Go easy on the torn meniscus");
+});
