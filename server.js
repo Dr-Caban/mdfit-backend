@@ -934,7 +934,7 @@ function createApp(cfg = loadConfig()) {
 
   // Dr. Jared books the consultation himself: no payment (inpatients never pay; outpatient fees are settled outside
   // this flow), the video link goes to the patient right away, the slot is blocked and it lands on Google Calendar.
-  admin.post("/clients/:id/consult", (req, res) => {
+  admin.post("/clients/:id/consult", async (req, res) => {
     const c = clientById(req.params.id);
     if (!c) return res.status(404).json({ error: "Client not found." });
     const b = req.body || {}, s = settings();
@@ -946,6 +946,13 @@ function createApp(cfg = loadConfig()) {
     if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     const start = toMin(b.time), end = start + minutes;
+    const now = nowParts(cfg.tz, cfg.now());
+    if (b.date + b.time <= now.date + now.time) return res.status(400).json({ error: "That time has already passed. Pick a time in the future." });
+    // Dr. Jared's Google Calendar / SimplePractice busy blocks count too (read before the appointment check, so a
+    // booking that lands while we wait is still caught)
+    const busy = await calsync.busy(b.date, b.date, { icsUrl: spUrl() });
+    const block = busyOn(b.date, busy).find(([s0, e0]) => s0 < end && e0 > start);
+    if (block && !b.force) return res.status(409).json({ error: "That overlaps something on your calendar (Google Calendar or SimplePractice). Pick another time." });
     const clash = appointments().find((a) => a.date === b.date && a.status === "booked" && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
     if (clash && !b.force) return res.status(409).json({ error: `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
     const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
