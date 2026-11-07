@@ -175,3 +175,32 @@ test("stripe: an installment paid while the plan's schedule is being set up stay
   const p = (await s.call("GET", "/api/me/payments", undefined, T)).body.protocols[0];
   assert.equal(p.paid, 1, "the first installment stays counted");
 });
+
+test("cancelling a Cal.com visit doesn't erase a booking made while Cal answers", async (t) => {
+  const http = require("node:http");
+  let release; let gate;
+  const cal = http.createServer((req, res) => { req.resume(); req.on("end", async () => { await gate; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ status: "success", data: {} })); }); }).listen(0);
+  await new Promise((r) => cal.once("listening", r));
+  t.after(() => cal.close());
+  const calAppt = (id, time) => ({ id, source: "cal", calUid: "uid-" + id, typeId: "cal", typeName: "Evaluation", minutes: 60, date: "2026-11-05", time, name: "Pat Doe",
+    email: "pat@example.com", phone: "941-555-0100", notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: "t".repeat(32), createdAt: "2026-11-01T00:00:00Z" });
+  const s = await start({ calKey: "cal_key", calUrl: `http://127.0.0.1:${cal.address().port}/v2`, seed: { appointments: [calAppt("aaaaaaaaaaaa", "09:00"), calAppt("bbbbbbbbbbbb", "13:00")] } }); t.after(s.close);
+  const A = await s.adminToken();
+  const { token: T } = (await signup(s)).body;
+  const book = (time) => s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time, name: "Lee Roe", email: "lee@example.com", phone: "941-555-0100" });
+
+  for (const [cancel, time] of [[() => s.call("PATCH", "/api/admin/appointments/aaaaaaaaaaaa", { status: "cancelled" }, A), "09:00"],
+    [() => s.call("POST", "/api/me/appointments/bbbbbbbbbbbb/cancel", {}, T), "11:00"]]) {
+    gate = new Promise((r) => (release = r));
+    const pending = cancel();
+    await new Promise((r) => setTimeout(r, 50));
+    const b = await book(time);
+    assert.equal(b.status, 201, JSON.stringify(b.body));
+    release();
+    assert.equal((await pending).status, 200);
+    const all = (await s.call("GET", "/api/admin/appointments?all=1", undefined, A)).body;
+    assert.ok(all.some((a) => a.id === b.body.appointment.id), "the booking made meanwhile is still there");
+  }
+  const all = (await s.call("GET", "/api/admin/appointments?all=1", undefined, A)).body;
+  assert.deepEqual(all.filter((a) => a.source === "cal").map((a) => a.status), ["cancelled", "cancelled"]);
+});

@@ -932,8 +932,8 @@ function createApp(cfg = loadConfig()) {
       .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, a.clientId ? byId.get(a.clientId) : null) })));
   });
   admin.patch("/appointments/:id", async (req, res) => {
-    const list = appointments();
-    const appt = list.find((x) => x.id === req.params.id);
+    let list = appointments();
+    let appt = list.find((x) => x.id === req.params.id);
     if (!appt) return res.status(404).json({ error: "Appointment not found." });
     const b = req.body || {};
     if (b.status !== undefined) {
@@ -941,6 +941,9 @@ function createApp(cfg = loadConfig()) {
       // Cancelling a Cal booking here cancels it in Cal too, so Cal emails the client and frees the slot.
       if (b.status === "cancelled" && appt.status !== "cancelled" && appt.source === "cal") {
         try { await cal.cancel(appt.calUid, "Cancelled by MD Fit"); } catch (err) { return res.status(502).json({ error: err.message }); }
+        // Read again after waiting on Cal, so bookings saved meanwhile aren't overwritten by the older copy
+        list = appointments(); appt = list.find((x) => x.id === req.params.id);
+        if (!appt) return res.status(404).json({ error: "Appointment not found." });
       }
       if (b.status === "cancelled" && appt.status !== "cancelled") unsyncBooking(appt);
       appt.status = b.status;
