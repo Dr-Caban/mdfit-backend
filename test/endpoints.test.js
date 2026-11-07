@@ -245,3 +245,17 @@ test("scheduling a video consultation with the link left blank uses the practice
   const mine = (await s.call("GET", "/api/me/appointments", undefined, T)).body.upcoming.find((a) => a.id === r.body.id);
   assert.equal(mine.meetingLink, "https://zoom.us/j/777");
 });
+
+test("an older account without a referral code gets one that stays the same", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: T } = (await signup(s)).body;
+  const cls = s.readJson("clients"); delete cls[0].referralCode; s.writeJson("clients", cls);
+  const a = (await s.call("GET", "/api/me", undefined, T)).body.client.referralCode;
+  const b = (await s.call("GET", "/api/me", undefined, T)).body.client.referralCode;
+  assert.ok(a);
+  assert.equal(a, b);
+  assert.equal((await s.call("GET", "/api/me/referral", undefined, T)).body.code, a);
+  // and a friend can sign up with it
+  await signup(s, { email: "friend@example.com", referralCode: a });
+  assert.equal((await s.call("GET", "/api/me/referral", undefined, T)).body.referrals, 1);
+});
