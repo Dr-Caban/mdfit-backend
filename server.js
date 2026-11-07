@@ -591,7 +591,7 @@ function createApp(cfg = loadConfig()) {
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     // The free plan review is a reward: it needs an unused code from a submitted review
     let reward = null;
-    const fb = type === PLAN_REVIEW ? feedback() : null;
+    let fb = type === PLAN_REVIEW ? feedback() : null;
     if (fb) {
       const code = String((req.body && req.body.rewardCode) || "").trim().toUpperCase();
       reward = fb.find((f) => f.rewardCode === code);
@@ -599,6 +599,13 @@ function createApp(cfg = loadConfig()) {
       if (reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
     }
     const busy = await calsync.busy(a.date, a.date, { icsUrl: spUrl() });
+    // Other requests may have run while we waited for the calendar: the slot check reads appointments fresh, and the
+    // reward code is looked up again so two bookings can't both use it (and an older copy of reviews isn't written back)
+    if (fb) {
+      const code = reward.rewardCode;
+      fb = feedback(); reward = fb.find((f) => f.rewardCode === code);
+      if (!reward || reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
+    }
     if (!openSlots(type, a.date, s, busy).includes(a.time))
       return res.status(409).json({ error: "That time was just taken or isn't available. Pick another." });
     // A signed-in member booking with their own email: the visit is linked to their account (documents on file count)
