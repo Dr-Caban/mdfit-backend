@@ -494,9 +494,10 @@ test("telehealth prices: saved old defaults move to $150 evaluation and 30-minut
   const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword(PASSWORD), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => NOW });
   const saved = createStore(dataDir).read("settings", {});
   const e2 = saved.appointmentTypes.find((t) => t.id === "eval-remote"), f2 = saved.appointmentTypes.find((t) => t.id === "followup-remote");
-  assert.match(e2.description, /\$150\./); assert.equal(f2.minutes, 30); assert.match(f2.description, /\$80\./);
-  assert.equal(saved.services.find((v) => v.id === "eval-remote").rate, 150); assert.equal(saved.services.find((v) => v.id === "followup-remote").rate, 80);
-  assert.equal(saved.appointmentTypes.find((t) => t.id === "session-remote").description, "Custom text $300.", "other types untouched");
+  assert.match(e2.description, /\$150\./); assert.equal(f2.minutes, 30); assert.match(f2.description, /\$75\./);
+  assert.equal(saved.services.find((v) => v.id === "eval-remote").rate, 150); assert.equal(saved.services.find((v) => v.id === "followup-remote").rate, 75);
+  assert.equal(saved.appointmentTypes.find((t) => t.id === "session-remote").description, "Custom text $150.", "telehealth at $150 an hour");
+  assert.equal(saved.appointmentTypes.find((t) => t.id === "eval").description, require("../lib/validate").defaultSettings().appointmentTypes.find((t) => t.id === "eval").description, "in-studio types untouched");
   assert.equal(saved.telehealthPrices2026, true);
   fs2.rmSync(dataDir, { recursive: true, force: true }); void app;
 });

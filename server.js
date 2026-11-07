@@ -210,7 +210,7 @@ function createApp(cfg = loadConfig()) {
     const s = store.read("settings", null);
     if (!s || s.telehealthPrices2026) return;
     for (const t of s.appointmentTypes || []) {
-      if (t.id === "eval-remote" && /\$300\b/.test(t.description || "")) t.description = t.description.replace(/\$300\b/, "$150");
+      if (t.id === "eval-remote" && /\$300\b/.test(t.description || "")) t.description = t.description.replace(/\$300\b/, () => "$150"); // a function: "$1…" in a replacement string means a capture group
       if (t.id === "followup-remote" && t.minutes === 45 && /\$150\b/.test(t.description || "")) { t.minutes = 30; t.description = "A remote check-in by video for returning patients. $80."; }
     }
     for (const v of s.services || []) {
@@ -218,6 +218,26 @@ function createApp(cfg = loadConfig()) {
       if (v.id === "followup-remote" && v.rate === 150 && v.unit === "45 minutes") { v.rate = 80; v.unit = "30 minutes"; }
     }
     s.telehealthPrices2026 = true;
+    store.write("settings", s);
+  })();
+
+  // Telehealth is $150 an hour, prorated (owner, Nov 2026): 60 min $150, 30 min $75. Replaces only the previous
+  // defaults ($300 / $200 / $150 / $80), so prices the owner set by hand afterwards stay as they are.
+  (function telehealthHourly150() {
+    const s = store.read("settings", null);
+    if (!s || s.telehealthHourly150) return;
+    const price = (min) => `$${Math.round(150 * min / 60)}`;
+    for (const t of s.appointmentTypes || []) {
+      if (!["eval-remote", "session-remote", "followup-remote"].includes(t.id)) continue;
+      if (t.id === "followup-remote" && t.minutes === 45) t.minutes = 30;
+      t.description = String(t.description || "").replace(/\$(300|200|150|80)\b/, () => price(t.minutes || 60));
+    }
+    for (const v of s.services || []) {
+      if (!["eval-remote", "session-remote", "followup-remote"].includes(v.id)) continue;
+      const min = Number(String(v.unit || "60").match(/\d+/)) || 60;
+      if ([300, 200, 150, 80].includes(v.rate)) v.rate = Math.round(150 * min / 60);
+    }
+    s.telehealthHourly150 = true;
     store.write("settings", s);
   })();
 
@@ -941,10 +961,15 @@ function createApp(cfg = loadConfig()) {
     const type = s.appointmentTypes.find((t) => t.id === b.typeId);
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     if (!notify.enabled || !cfg.siteUrl) return res.status(503).json({ error: "Email isn't set up (RESEND_API_KEY, SITE_URL)." });
+    // A video visit is never sent without the way to join it
+    const room = (s.booking && s.booking.telehealthUrl) || "";
+    if (type.remote && !room) return res.status(400).json({ error: "Add your Video visit link first (Home → Hours & sync), so the email includes the link to join the call." });
     const note = String(b.message || "").trim().slice(0, 500);
     const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
     notify.client(c.email, `Book your ${type.name} with Dr. Jared`,
-      `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
+      `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n` +
+      (type.remote ? `This visit is on video. At your appointment time, join here:\n${room}\n(The link is also in your booking confirmation and your MD Fit account.)\n\n` : "") +
+      `${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
     activity("booking_link_sent", { email: c.email, type: type.id });
     res.json({ ok: true, link, message: `Booking link for ${type.name} emailed to ${c.name.split(" ")[0]}.` });
   });
