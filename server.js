@@ -906,6 +906,55 @@ function createApp(cfg = loadConfig()) {
     const { cancelToken, ...out } = appt;
     res.json(out);
   });
+  // ---- From a client's profile: send a booking link, or schedule a video consultation directly.
+  const clientById = (cid) => store.read("clients", []).find((c) => c.id === cid) || null;
+  admin.post("/clients/:id/send-booking-link", (req, res) => {
+    const c = clientById(req.params.id);
+    if (!c) return res.status(404).json({ error: "Client not found." });
+    const b = req.body || {}, s = settings();
+    const type = s.appointmentTypes.find((t) => t.id === b.typeId);
+    if (!type) return res.status(400).json({ error: "Pick an appointment type." });
+    if (!notify.enabled || !cfg.siteUrl) return res.status(503).json({ error: "Email isn't set up (RESEND_API_KEY, SITE_URL)." });
+    const note = String(b.message || "").trim().slice(0, 500);
+    const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
+    notify.client(c.email, `Book your ${type.name} with Dr. Jared`,
+      `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n${c.clientType === "inpatient" ? "As an in-clinic patient there's nothing to pay online.\n\n" : ""}${s.business.name}`);
+    activity("booking_link_sent", { email: c.email, type: type.id });
+    res.json({ ok: true, link, message: `Booking link for ${type.name} emailed to ${c.name.split(" ")[0]}.` });
+  });
+
+  // Dr. Jared books the consultation himself: no payment (inpatients never pay; outpatient fees are settled outside
+  // this flow), the video link goes to the patient right away, the slot is blocked and it lands on Google Calendar.
+  admin.post("/clients/:id/consult", (req, res) => {
+    const c = clientById(req.params.id);
+    if (!c) return res.status(404).json({ error: "Client not found." });
+    const b = req.body || {}, s = settings();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || "") || !/^\d{2}:\d{2}$/.test(b.time || "")) return res.status(400).json({ error: "Pick a date and time." });
+    const minutes = Number(b.minutes || 30);
+    if (![15, 30, 45, 60, 90].includes(minutes)) return res.status(400).json({ error: "Length is 15, 30, 45, 60 or 90 minutes." });
+    let link;
+    try { link = meetingUrl(b.meetingLink === undefined ? s.booking.telehealthUrl : b.meetingLink, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
+    if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
+    const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+    const start = toMin(b.time), end = start + minutes;
+    const clash = appointments().find((a) => a.date === b.date && a.status === "booked" && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
+    if (clash && !b.force) return res.status(409).json({ error: `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
+    const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
+    const appt = { id: id(), typeId: "consult-video", typeName, minutes, date: b.date, time: b.time, name: c.name, email: c.email, phone: c.phone || "",
+      notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
+      source: "admin", meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
+    const list = appointments(); list.push(appt); store.write("appointments", list);
+    activity("consult_scheduled", { email: c.email, date: b.date });
+    const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(b.date);
+    syncBooking(appt);
+    const when = `${prettyDate(b.date)} at ${prettyTime(b.time)}`;
+    const note = String(b.message || "").trim().slice(0, 500);
+    notify.client(c.email, `Video consultation with Dr. Jared: ${when}`,
+      `Hi ${c.name.split(" ")[0]},\n\nDr. Jared scheduled a ${minutes}-minute ${typeName.toLowerCase()} with you on ${when}.\n\n${note ? note + "\n\n" : ""}Join here at that time:\n${link}\n\nPlease join from a quiet, private room. The link is also in your MD Fit account under Appointments.\n\n${s.business.name}`);
+    const { cancelToken, ...out } = appt;
+    res.status(201).json(out);
+  });
+
   admin.get("/appointments.csv", (req, res) => {
     res.type("text/csv").attachment("mdfit-appointments.csv")
       .send(toCsv(appointments(), ["date", "time", "typeName", "minutes", "name", "email", "phone", "areas", "painLevel", "notes", "status", "adminNotes", "createdAt"]));

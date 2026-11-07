@@ -686,3 +686,37 @@ test("become a patient: documents filled from the dashboard stay on file and cou
   assert.equal(cv.docs[1].fields.find((f) => f.label === "Pain right now").value, "4/10");
   assert.equal((await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, tok)).status, 401, "admin only");
 });
+
+test("client type, assigned and saved programs, booking link and video consultation from the client profile", async (t) => {
+  const s = await start(); t.after(s.close);
+  const tok = (await signup(s)).body.token;
+  const admin = await s.adminToken();
+  const me = async () => (await s.call("GET", "/api/me", undefined, tok)).body.client;
+  assert.equal((await me()).clientType, "outpatient", "everyone starts as an outpatient");
+  const cid = (await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].id;
+  assert.equal((await s.call("PUT", `/api/admin/clients/${cid}/type`, { type: "vip" }, admin)).status, 400);
+  assert.equal((await s.call("PUT", `/api/admin/clients/${cid}/type`, { type: "inpatient" }, tok)).status, 401, "admin only");
+  assert.equal((await s.call("PUT", `/api/admin/clients/${cid}/type`, { type: "inpatient" }, admin)).body.clientType, "inpatient");
+  assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].clientType, "inpatient");
+  assert.equal((await me()).clientType, "inpatient");
+
+  const progs = (await s.call("GET", "/api/me/content", undefined, tok)).body.programs.map((p) => p.id);
+  assert.equal((await s.call("PUT", `/api/admin/clients/${cid}/programs`, { programs: [{ id: "nope" }] }, admin)).status, 400);
+  const as = await s.call("PUT", `/api/admin/clients/${cid}/programs`, { programs: [{ id: progs[0], note: "3x a week" }, { id: progs[1] }] }, admin);
+  assert.equal(as.status, 200); assert.equal(as.body.assignedPrograms.length, 2);
+  assert.deepEqual((await me()).assignedPrograms.map((x) => [x.id, x.note]), [[progs[0], "3x a week"], [progs[1], ""]]);
+
+  assert.equal((await s.call("PUT", "/api/me/pinned/nope", undefined, tok)).status, 400);
+  await s.call("PUT", `/api/me/pinned/${progs[2]}`, undefined, tok);
+  assert.deepEqual((await s.call("PUT", `/api/me/pinned/${progs[3]}`, undefined, tok)).body.pinnedPrograms, [progs[3], progs[2]], "newest first");
+  assert.deepEqual((await s.call("DELETE", `/api/me/pinned/${progs[3]}`, undefined, tok)).body.pinnedPrograms, [progs[2]]);
+
+  assert.equal((await s.call("POST", `/api/admin/clients/${cid}/send-booking-link`, { typeId: "nope" }, admin)).status, 400);
+  assert.equal((await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:00" }, admin)).status, 400, "needs a video link");
+  const c1 = await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:00", minutes: 30, meetingLink: "https://zoom.us/j/1" }, admin);
+  assert.equal(c1.status, 201); assert.equal(c1.body.payment, "exempt", "inpatients never pay"); assert.equal(c1.body.meetingLink, "https://zoom.us/j/1");
+  assert.equal((await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:15", meetingLink: "https://zoom.us/j/1" }, admin)).status, 409, "no double booking");
+  const mine = (await s.call("GET", "/api/me/appointments", undefined, tok)).body;
+  const up = (mine.upcoming || mine).find((a) => a.id === c1.body.id);
+  assert.ok(up && up.meetingLink === "https://zoom.us/j/1", "the consult shows in the patient's appointments with its link");
+});
