@@ -43,21 +43,21 @@ const EX = [{ id: "1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", sets: 3, reps: 12 }, { id
 const workoutXp = (r) => r.todayParts.workouts;
 
 test("gem levels at every boundary", () => {
-  const cases = [[0, "Peridot", 1], [100, "Peridot", 1], [101, "Garnet", 2], [500, "Garnet", 2], [501, "Onyx", 3], [1250, "Onyx", 3], [1251, "Emerald", 4],
-    [4000, "Emerald", 4], [4001, "Ruby", 5], [10000, "Ruby", 5], [10001, "Sapphire", 6], [20000, "Sapphire", 6], [20001, "Diamond", 7], [40000, "Diamond", 7], [40001, "Platinum", 8], [1e6, "Platinum", 8]];
+  const cases = [[0, "Peridot", 1], [50, "Peridot", 1], [51, "Garnet", 2], [500, "Garnet", 2], [501, "Onyx", 3], [2500, "Onyx", 3], [2501, "Emerald", 4],
+    [7500, "Emerald", 4], [7501, "Ruby", 5], [15000, "Ruby", 5], [15001, "Sapphire", 6], [30000, "Sapphire", 6], [30001, "Diamond", 7], [60000, "Diamond", 7], [60001, "Platinum", 8], [1e6, "Platinum", 8]];
   for (const [xp, name, level] of cases) {
     assert.equal(R.gemstoneOf(xp).current.name, name, `${xp} XP`);
     assert.equal(R.levelOf(xp), level, `${xp} XP level`);
   }
-  assert.deepEqual(R.GEMS.map((g) => g.xp), [0, 101, 501, 1251, 4001, 10001, 20001, 40001]);
-  assert.equal(R.gemstoneOf(100).xpToNext, 1); assert.equal(R.gemstoneOf(100).next.name, "Garnet");
-  assert.equal(R.gemstoneOf(40001).next, null); assert.equal(R.gemstoneOf(40001).progress, 1);
-  // through rewards(): 4 activity days of 25 = 100 → Peridot; one more XP → Garnet
-  const acts = (n) => Array.from({ length: n }, (_, i) => ({ date: day(1 + Math.floor(i / 5)), habitId: "a" + (i % 5), points: 20 }));
-  assert.equal(R.rewards({ activities: acts(5) }, day(30)).xp, 100);
+  assert.deepEqual(R.GEMS.map((g) => g.xp), [0, 51, 501, 2501, 7501, 15001, 30001, 60001]);
+  assert.equal(R.gemstoneOf(50).xpToNext, 1); assert.equal(R.gemstoneOf(50).next.name, "Garnet");
+  assert.equal(R.gemstoneOf(60001).next, null); assert.equal(R.gemstoneOf(60001).progress, 1);
+  // through rewards(): 5 activities of 10 on one day = 50 → Peridot; one more XP → Garnet
+  const acts = (n) => Array.from({ length: n }, (_, i) => ({ date: day(1 + Math.floor(i / 5)), habitId: "a" + (i % 5), points: 10 }));
+  assert.equal(R.rewards({ activities: acts(5) }, day(30)).xp, 50);
   assert.equal(R.rewards({ activities: acts(5) }, day(30)).title, "Peridot");
   const r = R.rewards({ activities: [...acts(5), { date: day(9), habitId: "x", points: 1 }] }, day(30));
-  assert.equal(r.xp, 101); assert.equal(r.title, "Garnet"); assert.equal(r.level, 2); assert.equal(r.nextLevel, 501);
+  assert.equal(r.xp, 51); assert.equal(r.title, "Garnet"); assert.equal(r.level, 2); assert.equal(r.nextLevel, 501);
 });
 
 test("workout XP: 30 normal, 35 built yourself, 50 Dr. Jared program; the day's best counts once", async (t) => {
@@ -192,10 +192,10 @@ test("overall ranking: #N by lifetime XP on rewards, an all-leagues all-time boa
   await log(s, c.token, { key: "prog-shoulder-6-d0" }); // 75
   let r = await rw(s, a.token);
   assert.deepEqual(r.overall, { rank: 2, total: 3, hidden: false });
-  assert.equal(r.rank.current.name, "Peridot"); assert.equal(r.rank.xpToNext, 101 - 55);
+  assert.equal(r.rank.current.name, "Garnet"); assert.equal(r.rank.xpToNext, 501 - 55);
   const board = (await s.call("GET", "/api/me/leaderboard?period=all&league=all", undefined, a.token)).body;
   assert.equal(board.league, "all");
-  assert.deepEqual(board.top.map((x) => [x.rank, x.name, x.score, x.gem.name]), [[1, "Kim R.", 75, "Peridot"], [2, "Pat D.", 55, "Peridot"], [3, "Lee P.", 20, "Peridot"]]);
+  assert.deepEqual(board.top.map((x) => [x.rank, x.name, x.score, x.gem.name]), [[1, "Kim R.", 75, "Garnet"], [2, "Pat D.", 55, "Garnet"], [3, "Lee P.", 20, "Peridot"]]);
   assert.equal(board.me.rank, r.overall.rank, "Home's #N matches the full board");
   assert.equal(board.olympicGem, "Emerald");
   // a hidden member still sees their own rank privately and isn't counted for others
@@ -203,5 +203,5 @@ test("overall ranking: #N by lifetime XP on rewards, an all-leagues all-time boa
   assert.deepEqual((await rw(s, c.token)).overall, { rank: 1, total: 3, hidden: true });
   const at = await s.adminToken();
   const d = (await s.call("GET", `/api/admin/clients/${a.client.id}`, undefined, at)).body;
-  assert.equal(d.rewards.xp, 55); assert.equal(d.rewards.gem.name, "Peridot"); assert.equal(d.rewards.overall.rank >= 1, true);
+  assert.equal(d.rewards.xp, 55); assert.equal(d.rewards.gem.name, "Garnet"); assert.equal(d.rewards.overall.rank >= 1, true);
 });
