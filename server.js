@@ -204,6 +204,23 @@ function createApp(cfg = loadConfig()) {
         ? [...s.appointmentTypes, d.appointmentTypes.find((t) => t.id === "massage")] : (s.appointmentTypes || d.appointmentTypes)
     };
   };
+  // One-time price update (owner spec, Nov 2026): telehealth evaluation 60 min $150, returning follow-up 30 min $80.
+  // Only the old default values are replaced, so anything the owner already customised in Admin stays as it is.
+  (function telehealthPrices2026() {
+    const s = store.read("settings", null);
+    if (!s || s.telehealthPrices2026) return;
+    for (const t of s.appointmentTypes || []) {
+      if (t.id === "eval-remote" && /\$300\b/.test(t.description || "")) t.description = t.description.replace(/\$300\b/, "$150");
+      if (t.id === "followup-remote" && t.minutes === 45 && /\$150\b/.test(t.description || "")) { t.minutes = 30; t.description = "A remote check-in by video for returning patients. $80."; }
+    }
+    for (const v of s.services || []) {
+      if (v.id === "eval-remote" && v.rate === 300) v.rate = 150;
+      if (v.id === "followup-remote" && v.rate === 150 && v.unit === "45 minutes") { v.rate = 80; v.unit = "30 minutes"; }
+    }
+    s.telehealthPrices2026 = true;
+    store.write("settings", s);
+  })();
+
   const classes = () => {
     let list = store.read("classes", null);
     if (list === null) {
