@@ -32,7 +32,7 @@ async function start({ seed = {}, ...extra } = {}) {
   const adminToken = async () => (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
   const readJson = (name) => JSON.parse(fs.readFileSync(path.join(dataDir, name + ".json"), "utf8"));
   const writeJson = (name, data) => fs.writeFileSync(path.join(dataDir, name + ".json"), JSON.stringify(data));
-  return { call, adminToken, dataDir, readJson, writeJson, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
+  return { call, adminToken, base, dataDir, readJson, writeJson, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 const signup = (s, over = {}) => s.call("POST", "/api/clients/signup", { name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", password: "pat-pass-123", ...over });
 
@@ -136,4 +136,42 @@ test("a too-short new password doesn't use up the emailed code", async (t) => {
   const ok = await s.call("PUT", "/api/me/password", { code, password: "long-enough-1" }, T);
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "long-enough-1" })).status, 200);
+});
+
+test("stripe: an installment paid while the plan's schedule is being set up stays paid", async (t) => {
+  const Stripe = require("stripe");
+  const real = new Stripe("sk_test_fake", { apiVersion: "2026-10-28.endive" });
+  let release; const gate = new Promise((r) => (release = r));
+  let customerGate = null;
+  const fake = {
+    webhooks: real.webhooks,
+    customers: { create: async () => { if (customerGate) await customerGate; return { id: "cus_1" }; } },
+    checkout: { sessions: { create: async (p) => ({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_test", metadata: p.metadata }) } },
+    subscriptionSchedules: { create: async () => { await gate; return { id: "sched_1", phases: [{ start_date: 1790000000, items: [{ price: "price_1", quantity: 1 }] }] }; }, update: async (id) => ({ id }) }
+  };
+  const whsec = "whsec_test_secret";
+  const s = await start({ stripeClient: fake, stripeWebhookSecret: whsec }); t.after(s.close);
+  const send = (ev) => {
+    const payload = JSON.stringify(ev);
+    return fetch(s.base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": real.webhooks.generateTestHeaderString({ payload, secret: whsec }) }, body: payload }).then((r) => r.json());
+  };
+  const { token: T } = (await signup(s)).body;
+  // While the Stripe customer is being created, the member logs pain: the customer id save must not undo it
+  let openCustomer; customerGate = new Promise((r) => (openCustomer = r));
+  const checkout = s.call("POST", "/api/me/checkout/protocol", { service: "followup", sessions: 12, plan: "silver" }, T);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await s.call("POST", "/api/me/pain", { area: "Knee", level: 3, note: "" }, T)).status, 201);
+  openCustomer(); customerGate = null;
+  const co = await checkout;
+  assert.equal(co.status, 200, JSON.stringify(co.body));
+  assert.equal((await s.call("GET", "/api/me/pain", undefined, T)).body.length, 1, "pain entry kept");
+  const pid = (await s.call("GET", "/api/me/payments", undefined, T)).body.protocols[0].id;
+  const md = { kind: "protocol", protocolId: pid, payments: "3" };
+  const done = send({ id: "evt_c", type: "checkout.session.completed", data: { object: { id: "cs_1", mode: "subscription", payment_status: "paid", customer: "cus_1", subscription: "sub_p", metadata: md } } });
+  await new Promise((r) => setTimeout(r, 50));
+  await send({ id: "evt_i", type: "invoice.paid", data: { object: { id: "in_1", customer: "cus_1", parent: { subscription_details: { subscription: "sub_p" } } } } });
+  release();
+  await done;
+  const p = (await s.call("GET", "/api/me/payments", undefined, T)).body.protocols[0];
+  assert.equal(p.paid, 1, "the first installment stays counted");
 });
