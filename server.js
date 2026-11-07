@@ -1142,6 +1142,7 @@ function createApp(cfg = loadConfig()) {
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
+  require("./lib/habits").mountHabits({ app, admin, store, ...cl }); // healthy habits, daily points, frozen goal, streak repairs
   mountAnalytics({ app, admin, store, limiter });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
   admin.get("/email-log", (req, res) => {
