@@ -946,6 +946,8 @@ function createApp(cfg = loadConfig()) {
         if (!appt) return res.status(404).json({ error: "Appointment not found." });
       }
       if (b.status === "cancelled" && appt.status !== "cancelled") unsyncBooking(appt);
+      // Un-cancelling puts the visit back on Google Calendar
+      if (appt.status === "cancelled" && b.status !== "cancelled") { delete appt.googleEventId; syncBooking(appt); }
       appt.status = b.status;
     }
     if (b.adminNotes !== undefined) {

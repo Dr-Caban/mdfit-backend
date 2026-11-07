@@ -256,7 +256,8 @@ test("workout performance numbers, later edits and daily vitals", async (t) => {
   assert.equal(r.status, 201);
   assert.equal(r.body.workout.hrAvg, 132);
   assert.deepEqual(r.body.workout.lifts, [{ name: "Goblet Squat", weight: 35, reps: 10 }]);
-  assert.equal((await s.call("POST", "/api/me/workouts", { title: "x", minutes: 10, hrAvg: 400 }, tok)).status, 400);
+  const glitch = await s.call("POST", "/api/me/workouts", { title: "x", minutes: 10, hrAvg: 400 }, tok);
+  assert.equal(glitch.status, 201, "an impossible watch reading is dropped, the workout still saves"); assert.equal(glitch.body.workout.hrAvg, undefined);
   const p = await s.call("PATCH", `/api/me/workouts/${r.body.workout.id}`, { hrv: 61, vo2max: 44.36, source: "Apple Watch" }, tok);
   assert.equal(p.status, 200);
   assert.equal(p.body.vo2max, 44.4);
@@ -756,4 +757,14 @@ test("forms filled from a visit's intake link show on the client's Admin profile
   const cv = (await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, admin));
   assert.equal(cv.status, 200); assert.equal(cv.body.docs.length, 4);
   assert.equal((await s.call("GET", "/api/me/intake", undefined, tok)).body.completed, 0, "the member side never credits a booking by email");
+});
+
+test("a glitchy watch reading is dropped, not the whole workout", async (t) => {
+  const s = await start(); t.after(s.close);
+  const tok = (await signup(s)).body.token;
+  const r = await s.call("POST", "/api/me/workouts", { title: "Run", goal: "Cardio", minutes: 30, exercises: 1, hrAvg: 150, hrMax: 262 }, tok);
+  assert.equal(r.status, 201);
+  const w = (await s.call("GET", "/api/me", undefined, tok)).body;
+  assert.ok(JSON.stringify(w).includes("Run") || r.body);
+  assert.equal(r.body.workout ? r.body.workout.hrMax : undefined, undefined, "the 262 bpm spike isn't kept");
 });
