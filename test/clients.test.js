@@ -202,7 +202,7 @@ test("log workouts and read stats", async (t) => {
   assert.equal(d.stats.streak, 1);
 });
 
-test("rewards math: XP, streak bonus, levels and badge dates", () => {
+test("rewards math: XP, gem levels and badge dates", () => {
   const { rewards } = require("../lib/rewards");
   const w = (date, minutes, goal = "Full Body") => ({ date, minutes, goal, completedAt: date + "T15:00:00Z" });
   const r = rewards({
@@ -210,9 +210,10 @@ test("rewards math: XP, streak bonus, levels and badge dates", () => {
     painLog: [{ date: "2026-03-02", area: "Knee", level: 7 }, { date: "2026-03-04", area: "Knee", level: 3 }],
     visits: [{ date: "2026-03-05" }]
   }, "2026-03-05");
-  // 35 + (50+4) + (30+6) workouts, 10 pain, 50 visit, plus 5 badges x 25 bonus
-  assert.equal(r.xp, 310);
-  assert.equal(r.level, 3);
+  // 3 x 30 workouts (flat, no streak bonus), 10 pain, 50 visit, plus 5 badges x 25 bonus
+  assert.equal(r.xp, 275);
+  assert.equal(r.level, 2); assert.equal(r.title, "Garnet");
+  assert.equal(r.rank.current.name, "Garnet"); assert.equal(r.rank.next.name, "Onyx"); assert.equal(r.rank.xpToNext, 226);
   assert.equal(r.todayXp, 75);
   const b = Object.fromEntries(r.badges.map((x) => [x.id, x]));
   assert.equal(b["first-workout"].earnedOn, "2026-03-02");
