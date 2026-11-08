@@ -215,3 +215,24 @@ test("overall ranking: #N by lifetime XP on rewards, an all-leagues all-time boa
   const d = (await s.call("GET", `/api/admin/clients/${a.client.id}`, undefined, at)).body;
   assert.equal(d.rewards.xp, 55); assert.equal(d.rewards.gem.name, "Amber"); assert.equal(d.rewards.overall.rank >= 1, true);
 });
+
+test("accountability membership: $1 off per active day, 20 days takes $30 down to the $10 floor", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await member(s, "Pat Doe");
+  await s.call("PUT", `/api/admin/clients/${a.client.id}/membership`, { tier: "accountability", until: "2027-12-31" }, await s.adminToken());
+  s.setDay(day(1));
+  let r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
+  assert.equal(r.enabled, true); assert.equal(r.price, 30); assert.equal(r.floor, 10); assert.equal(r.credit, 0); assert.equal(r.owed, 30);
+  for (let d = 1; d <= 3; d++) { s.setDay(day(d)); await log(s, a.token); }
+  r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
+  assert.equal(r.activeDays, 3); assert.equal(r.credit, 3); assert.equal(r.owed, 27); assert.equal(r.atFloor, false);
+  for (let d = 4; d <= 25; d++) { s.setDay(day(d)); await log(s, a.token); }
+  r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
+  assert.equal(r.activeDays, 25); assert.equal(r.credit, 20, "credit stops at 20 days"); assert.equal(r.owed, 10, "never below the floor"); assert.equal(r.atFloor, true); assert.equal(r.free, false);
+  // the flat membership has no credit
+  await s.call("PUT", `/api/admin/clients/${a.client.id}/membership`, { tier: "member", until: "2027-12-31" }, await s.adminToken());
+  assert.equal((await s.call("GET", "/api/me/accountability", undefined, a.token)).body.enabled, false);
+  // the default lineup the app shows
+  const tiers = (await s.call("GET", "/api/content")).body.tiers;
+  assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 20, 0], ["accountability", 30, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
+});
