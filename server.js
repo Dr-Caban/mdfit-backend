@@ -67,6 +67,7 @@ function loadConfig() {
     apnsTeamId: env("APNS_TEAM_ID", "N6HQNTVSZB"),
     apnsBundleId: env("APNS_BUNDLE_ID", "com.mdfitsrq.MDfit"),
     apnsSandbox: env("APNS_ENV") === "sandbox",
+    fcmServiceAccount: env("FCM_SERVICE_ACCOUNT"), // Android: Firebase service-account JSON
     simplePracticeIcs: env("SIMPLEPRACTICE_ICS_URL"),
     googleUrl: env("GOOGLE_PLACES_URL", "https://places.googleapis.com/v1"),
     googleLegacyUrl: env("GOOGLE_PLACES_LEGACY_URL", "https://maps.googleapis.com/maps/api/place"),
@@ -143,7 +144,7 @@ function createApp(cfg = loadConfig()) {
     store.write("email-log", d);
   }
   const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, alertEmails: cfg.alertEmails || [], apiUrl: cfg.resendUrl, minGapMs: cfg.notifyGapMs, onResult: logEmail });
-  const push = createPush({ key: cfg.apnsKey, keyId: cfg.apnsKeyId, teamId: cfg.apnsTeamId, bundleId: cfg.apnsBundleId, sandbox: cfg.apnsSandbox, store, tz: cfg.tz, nowParts, zonedToUtc, prettyTime });
+  const push = createPush({ key: cfg.apnsKey, keyId: cfg.apnsKeyId, teamId: cfg.apnsTeamId, bundleId: cfg.apnsBundleId, sandbox: cfg.apnsSandbox, fcmServiceAccount: cfg.fcmServiceAccount, store, tz: cfg.tz, nowParts, zonedToUtc, prettyTime });
   const cal = createCal({ apiKey: cfg.calKey, apiUrl: cfg.calUrl });
   const places = createPlaces({ apiKey: cfg.googleKey, baseUrl: cfg.googleUrl, legacyUrl: cfg.googleLegacyUrl });
 
@@ -1251,7 +1252,7 @@ function createApp(cfg = loadConfig()) {
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
   // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
-  const deviceBody = (req) => ({ token: String((req.body && req.body.token) || "").toLowerCase(), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
+  const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
   cl.me.post("/devices", (req, res) => {
     const { token, platform } = deviceBody(req);
     if (!push.register({ token, clientId: req.client.id, platform })) return res.status(400).json({ error: "Bad device token." });
@@ -1264,7 +1265,7 @@ function createApp(cfg = loadConfig()) {
     res.json({ ok: true, enabled: push.enabled });
   });
   admin.delete("/devices/:token", (req, res) => { push.unregister(req.params.token); res.json({ ok: true }); });
-  admin.get("/push", (req, res) => res.json({ enabled: push.enabled, devices: store.read("devices", []).length }));
+  admin.get("/push", (req, res) => res.json({ enabled: push.enabled, ios: push.apns, android: push.fcm, devices: store.read("devices", []).length }));
   // Visit reminders (day before at 6 PM, and an hour before) for members with the app
   app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
   mountContent({ app, admin, store, notify, activity, ...cl });

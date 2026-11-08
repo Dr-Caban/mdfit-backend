@@ -61,3 +61,14 @@ test("reminders fire once in their window and remember what was sent", () => {
   push.remind([appt]);
   assert.equal(Object.keys(store.read("pushsent", {})).length, 1, "not sent twice");
 });
+
+test("Android (FCM) tokens register alongside iPhone tokens", () => {
+  const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), "push-")));
+  const push = createPush({ key: key(), keyId: "K1", teamId: "T1", store, nowParts, zonedToUtc });
+  const fcmTok = "d" + "x".repeat(120) + ":APA91b" + "y".repeat(40);
+  assert.equal(push.register({ token: fcmTok, clientId: "a", platform: "android" }), true);
+  assert.equal(push.register({ token: fcmTok, clientId: "a", platform: "ios" }), false, "not an APNs token");
+  assert.equal(store.read("devices", [])[0].platform, "android");
+  assert.equal(push.unregister(fcmTok), true);
+  assert.equal(store.read("devices", []).length, 0);
+});
