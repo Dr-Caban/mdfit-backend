@@ -35,10 +35,12 @@ async function start() {
 }
 let n = 0;
 const member = async (s, name) => (await s.call("POST", "/api/clients/signup", { name, email: `m${++n}@example.com`, phone: "941-555-0100", password: "pass-word-123" })).body;
+// Building workouts and sending challenges take a paid membership (owner): grant one the way Admin does
+const paying = async (s, name) => { const m = await member(s, name); await s.call("PUT", `/api/admin/clients/${m.client.id}/membership`, { tier: "member", until: "2027-12-31" }, await s.adminToken()); return m; };
 const log = (s, tok, over = {}) => s.call("POST", "/api/me/workouts", { title: "Session", goal: "Full Body", minutes: 20, exercises: 5, ...over }, tok);
 const rw = async (s, tok) => (await s.call("GET", "/api/me/rewards", undefined, tok)).body;
 const day = (d) => `2026-11-${String(d).padStart(2, "0")}`;
-const EX = [{ id: "1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", sets: 3, reps: 12 }, { id: "19oVNanPf74w0AaXBZ1LBQoVgAk6VosmU", sets: 2, seconds: 45 }];
+const EX = [{ id: "1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", sets: 3, reps: 12 }, { id: "19oVNanPf74w0AaXBZ1LBQoVgAk6VosmU", sets: 2, reps: 8 }];
 // Workout XP for a day, without the one-off "First Rep" badge bonus
 const workoutXp = (r) => r.todayParts.workouts;
 
@@ -62,7 +64,7 @@ test("gem levels at every boundary", () => {
 
 test("workout XP: 30 normal, 35 built yourself, 50 Dr. Jared program; the day's best counts once", async (t) => {
   const s = await start(); t.after(s.close);
-  const a = await member(s, "Pat Doe");
+  const a = await paying(s, "Pat Doe");
   // normal (generator / today's workout): 30, a second one the same day adds 0
   let w = await log(s, a.token, { key: "full-body-power" });
   assert.equal(w.body.workout.kind, "normal");
@@ -75,7 +77,7 @@ test("workout XP: 30 normal, 35 built yourself, 50 Dr. Jared program; the day's 
   assert.equal(w.body.workout.kind, "custom"); assert.equal(w.body.workout.ref, saved.id);
   assert.equal(workoutXp(await rw(s, a.token)), 35);
   // someone else's custom id doesn't count as yours
-  const b = await member(s, "Lee Park");
+  const b = await paying(s, "Lee Park");
   const bw = (await s.call("POST", "/api/me/custom-workouts", { name: "B's", exercises: EX }, b.token)).body.saved;
   s.setDay(day(3));
   assert.equal((await log(s, a.token, { key: `custom-${bw.id}` })).body.workout.kind, "normal");
@@ -97,7 +99,7 @@ test("workout XP: 30 normal, 35 built yourself, 50 Dr. Jared program; the day's 
 
 test("workout builder: save, edit, delete, validation", async (t) => {
   const s = await start(); t.after(s.close);
-  const a = await member(s, "Pat Doe");
+  const a = await paying(s, "Pat Doe");
   assert.equal((await s.call("GET", "/api/me/custom-workouts")).status, 401);
   assert.equal((await s.call("POST", "/api/me/custom-workouts", { name: "", exercises: EX }, a.token)).status, 400);
   assert.equal((await s.call("POST", "/api/me/custom-workouts", { name: "X", exercises: [] }, a.token)).status, 400);
@@ -105,7 +107,10 @@ test("workout builder: save, edit, delete, validation", async (t) => {
   assert.equal((await s.call("POST", "/api/me/custom-workouts", { name: "X", exercises: [{ ...EX[0], sets: 11 }] }, a.token)).status, 400);
   const r = await s.call("POST", "/api/me/custom-workouts", { name: "  Leg day ", exercises: EX }, a.token);
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body.saved.exercises, [{ id: EX[0].id, sets: 3, reps: 12 }, { id: EX[1].id, sets: 2, seconds: 45 }]);
+  assert.deepEqual(r.body.saved.exercises, [{ id: EX[0].id, sets: 3, reps: 12 }, { id: EX[1].id, sets: 2, reps: 8 }]);
+  // owner: movements are always a rep count, never a time
+  const timed = await s.call("POST", "/api/me/custom-workouts", { name: "Hold", exercises: [{ ...EX[0], reps: undefined, seconds: 45 }] }, a.token);
+  assert.equal(timed.status, 400); assert.match(timed.body.error, /rep count/i);
   assert.equal(r.body.saved.name, "Leg day");
   const id = r.body.saved.id;
   const up = await s.call("PUT", `/api/me/custom-workouts/${id}`, { name: "Leg day 2", exercises: [EX[1], EX[0]] }, a.token);
@@ -117,13 +122,19 @@ test("workout builder: save, edit, delete, validation", async (t) => {
 
 test("challenges: sender +5 once a day, recipient 30 + 10 = 40, once per challenge; no health info", async (t) => {
   const s = await start(); t.after(s.close);
-  const a = await member(s, "Pat Doe"), b = await member(s, "Lee Park"), c = await member(s, "Kim Ray");
-  // everyone needs XP to be in the ranking pool
-  for (const m of [a, b, c]) await s.call("POST", "/api/me/habits/checkin", { habitId: "prayer" }, m.token);
+  const a = await paying(s, "Pat Doe"), b = await member(s, "Lee Park"), c = await member(s, "Kim Ray");
+  // Lee is a free account with no XP (not on the leaderboard) and can still be challenged (owner: anyone)
+  for (const m of [a, c]) await s.call("POST", "/api/me/habits/checkin", { habitId: "prayer" }, m.token);
   const mine = (await s.call("POST", "/api/me/custom-workouts", { name: "Pat's burner", exercises: EX }, a.token)).body.saved;
   const pool = (await s.call("GET", "/api/me/challenges/members", undefined, a.token)).body.members;
   assert.deepEqual(pool.map((m) => m.name), ["Kim R.", "Lee P."], "pool excludes yourself; first name + last initial only");
   assert.ok(pool.every((m) => Object.keys(m).sort().join() === "gem,id,name"));
+  assert.equal(pool.find((m) => m.name === "Lee P.").gem, null, "unranked: no gem"); assert.ok(pool.find((m) => m.name === "Kim R.").gem, "ranked: gem shown");
+  // a free member can't build or send, but is listed, receives and (below) does challenges for XP
+  const refused = await s.call("POST", "/api/me/custom-workouts", { name: "Lee's", exercises: EX }, b.token);
+  assert.equal(refused.status, 402); assert.equal(refused.body.membersOnly, true);
+  assert.equal((await s.call("POST", "/api/me/challenges", { workoutId: mine.id, toId: c.client.id }, b.token)).status, 402);
+  assert.deepEqual((await s.call("GET", "/api/me/challenges/members", undefined, b.token)).body.members.map((m) => m.name), ["Kim R.", "Pat D."], "free members see the pool too");
   const lee = pool.find((m) => m.name === "Lee P."), kim = pool.find((m) => m.name === "Kim R.");
 
   assert.equal((await s.call("POST", "/api/me/challenges", { workoutId: "nope", toId: lee.id }, a.token)).status, 400);
@@ -172,8 +183,7 @@ test("challenges: sender +5 once a day, recipient 30 + 10 = 40, once per challen
 
 test("hidden members can't be challenged or listed", async (t) => {
   const s = await start(); t.after(s.close);
-  const a = await member(s, "Pat Doe"), b = await member(s, "Lee Park");
-  for (const m of [a, b]) await s.call("POST", "/api/me/habits/checkin", { habitId: "prayer" }, m.token);
+  const a = await paying(s, "Pat Doe"), b = await member(s, "Lee Park");
   const mine = (await s.call("POST", "/api/me/custom-workouts", { name: "Burner", exercises: EX }, a.token)).body.saved;
   assert.equal((await s.call("GET", "/api/me/challenges/members", undefined, a.token)).body.members.length, 1);
   await s.call("PUT", "/api/me/leaderboard/visibility", { hidden: true }, b.token);
