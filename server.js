@@ -7,6 +7,7 @@ const { logger, mask, requestLogger } = require("./lib/logger");
 const { createStore } = require("./lib/store");
 const { verifyPassword, isValidHash, signToken, verifyToken } = require("./lib/auth");
 const { createNotifier } = require("./lib/notify");
+const { createPush } = require("./lib/push");
 const { createCal, verifySignature, normaliseBooking } = require("./lib/cal");
 const { createPlaces } = require("./lib/google");
 const { mountClients } = require("./lib/clients");
@@ -60,6 +61,13 @@ function loadConfig() {
     googleServiceAccount: env("GOOGLE_SERVICE_ACCOUNT"),
     googleCalendarId: env("GOOGLE_CALENDAR_ID"),
     calWatchMs: Math.max(0, Number(env("CAL_WATCH_SECONDS", "60")) || 0) * 1000,
+    // iPhone push notifications (MD Fit app): APNs auth key from developer.apple.com → Keys. Off until all three are set.
+    apnsKey: env("APNS_KEY"),
+    apnsKeyId: env("APNS_KEY_ID"),
+    apnsTeamId: env("APNS_TEAM_ID", "N6HQNTVSZB"),
+    apnsBundleId: env("APNS_BUNDLE_ID", "com.mdfitsrq.MDfit"),
+    apnsSandbox: env("APNS_ENV") === "sandbox",
+    fcmServiceAccount: env("FCM_SERVICE_ACCOUNT"), // Android: Firebase service-account JSON
     simplePracticeIcs: env("SIMPLEPRACTICE_ICS_URL"),
     googleUrl: env("GOOGLE_PLACES_URL", "https://places.googleapis.com/v1"),
     googleLegacyUrl: env("GOOGLE_PLACES_LEGACY_URL", "https://maps.googleapis.com/maps/api/place"),
@@ -136,6 +144,7 @@ function createApp(cfg = loadConfig()) {
     store.write("email-log", d);
   }
   const notify = createNotifier({ apiKey: cfg.resendKey, from: cfg.notifyFrom, ownerEmail: cfg.notifyEmail || cfg.adminEmail, alertEmails: cfg.alertEmails || [], apiUrl: cfg.resendUrl, minGapMs: cfg.notifyGapMs, onResult: logEmail });
+  const push = createPush({ key: cfg.apnsKey, keyId: cfg.apnsKeyId, teamId: cfg.apnsTeamId, bundleId: cfg.apnsBundleId, sandbox: cfg.apnsSandbox, fcmServiceAccount: cfg.fcmServiceAccount, store, tz: cfg.tz, nowParts, zonedToUtc, prettyTime });
   const cal = createCal({ apiKey: cfg.calKey, apiUrl: cfg.calUrl });
   const places = createPlaces({ apiKey: cfg.googleKey, baseUrl: cfg.googleUrl, legacyUrl: cfg.googleLegacyUrl });
 
@@ -171,6 +180,7 @@ function createApp(cfg = loadConfig()) {
     return reviewsInflight;
   }
   const app = express();
+  app.set("push", push); // iPhone notifications; lib/* reach it with app.get("push")
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
 
@@ -263,6 +273,7 @@ function createApp(cfg = loadConfig()) {
     logger.info("activity", { type, ...detail, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
     if (rt) rt.emitActivity(type, detail);
+    push.ownerActivity(type, detail); // Dr. Jared's phone (MD Fit app, signed in to Admin)
   }
 
   // ---- Cal.com: username + event types for the embed. Cached in memory, last good copy kept on disk
@@ -667,11 +678,12 @@ function createApp(cfg = loadConfig()) {
       const cls = store.read("clients", []), me = cls.find((x) => x.id === bookedBy.id);
       if (me && !me.phone) { me.phone = a.phone; store.write("clients", cls); }
     }
-    activity("appointment", { email: a.email, typeId: type.id, date: a.date });
+    const when = `${prettyDate(a.date)} at ${prettyTime(a.time)}`;
+    activity("appointment", { email: a.email, typeId: type.id, date: a.date, typeName: type.name, when, id: appt.id });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(a.date);
     syncBooking(appt);
+    if (bookedBy) push.toClient(bookedBy.id, { title: "You're booked", body: `${type.name}, ${when}. Tap to see your visits.`, route: "home", thread: "appointments" });
 
-    const when = `${prettyDate(a.date)} at ${prettyTime(a.time)}`;
     const biz = s.business;
     const isMassage = MASSAGE_TYPES.includes(type.id);
     // Every booking gets the new-patient intake documents (private link, same token as the cancel link)
@@ -714,7 +726,7 @@ function createApp(cfg = loadConfig()) {
     appt.cancelledAt = new Date().toISOString();
     store.write("appointments", list);
     unsyncBooking(appt);
-    activity("appointment_cancelled", { email: appt.email, date: appt.date });
+    activity("appointment_cancelled", { email: appt.email, date: appt.date, typeName: appt.typeName, when: `${prettyDate(appt.date)} at ${prettyTime(appt.time)}`, id: appt.id });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(appt.date);
     notify.owner(`Cancelled: ${appt.typeName}, ${prettyDate(appt.date)} at ${prettyTime(appt.time)}`, `${appt.name} (${appt.email}) cancelled online.`);
     res.json({ ok: true });
@@ -753,8 +765,8 @@ function createApp(cfg = loadConfig()) {
     const booking = { id: id(), ...b, title: session.title, time: session.time, cancelToken: newToken(), createdAt: new Date().toISOString() };
     list.push(booking);
     store.write("bookings", list);
-    activity("booking", { email: b.email, classId: b.classId, date: b.date });
     const when = `${prettyDate(b.date)} at ${prettyTime(session.time)}`;
+    activity("booking", { email: b.email, classId: b.classId, date: b.date, title: session.title, when, id: booking.id });
     const link = cancelLink("class", booking);
     notify.client(b.email, `You're in: ${session.title}, ${when}`,
       `Hi ${b.name.split(" ")[0]},\n\nYour spot in ${session.title} on ${when} is saved.` + (link ? `\n\nCan't make it? ${link}` : ""));
@@ -964,6 +976,7 @@ function createApp(cfg = loadConfig()) {
     // A new or changed video link goes straight to the patient (no health details, just the visit and the link)
     if (newLink && appt.status === "booked") {
       const when = `${prettyDate(appt.date)} at ${prettyTime(appt.time)}`;
+      { const c = clientOf(store, appt); if (c) push.toClient(c.id, { title: "Your video visit link is ready", body: `${appt.typeName}, ${when}. Tap to open it.`, route: "home", thread: "appointments" }); }
       notify.client(appt.email, `Your video visit link: ${appt.typeName}, ${when}`,
         `Hi ${appt.name.split(" ")[0]},\n\nHere is the link for your ${appt.typeName} on ${when}:\n${newLink}\n\nPlease join from a quiet, private room a few minutes early. The link is also in your MD Fit account under Appointments.\n\n${settings().business.name}`);
     }
@@ -984,6 +997,7 @@ function createApp(cfg = loadConfig()) {
     if (type.remote && !room) return res.status(400).json({ error: "Add your Video visit link first (Home → Hours & sync), so the email includes the link to join the call." });
     const note = String(b.message || "").trim().slice(0, 500);
     const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
+    push.toClient(c.id, { title: `Book your ${type.name}`, body: "Dr. Jared sent you a booking link. Tap to pick a time.", route: "home" });
     notify.client(c.email, `Book your ${type.name} with Dr. Jared`,
       `Hi ${c.name.split(" ")[0]},\n\n${note ? note + "\n\n" : ""}Pick a time that works for you here:\n${link}\n\n` +
       (type.remote ? `This visit is on video. At your appointment time, join here:\n${room}\n(The link is also in your booking confirmation and your MD Fit account.)\n\n` : "") +
@@ -1026,6 +1040,7 @@ function createApp(cfg = loadConfig()) {
     syncBooking(appt);
     const when = `${prettyDate(b.date)} at ${prettyTime(b.time)}`;
     const note = String(b.message || "").trim().slice(0, 500);
+    push.toClient(c.id, { title: "Video consultation scheduled", body: `Dr. Jared set a ${minutes}-minute video visit with you on ${when}.`, route: "home", thread: "appointments" });
     notify.client(c.email, `Video consultation with Dr. Jared: ${when}`,
       `Hi ${c.name.split(" ")[0]},\n\nDr. Jared scheduled a ${minutes}-minute ${typeName.toLowerCase()} with you on ${when}.\n\n${note ? note + "\n\n" : ""}Join here at that time:\n${link}\n\nPlease join from a quiet, private room. The link is also in your MD Fit account under Appointments.\n\n${s.business.name}`);
     const { cancelToken, ...out } = appt;
@@ -1236,6 +1251,23 @@ function createApp(cfg = loadConfig()) {
 
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
+  // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
+  const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
+  cl.me.post("/devices", (req, res) => {
+    const { token, platform } = deviceBody(req);
+    if (!push.register({ token, clientId: req.client.id, platform })) return res.status(400).json({ error: "Bad device token." });
+    res.json({ ok: true, enabled: push.enabled });
+  });
+  cl.me.delete("/devices/:token", (req, res) => { push.unregister(req.params.token); res.json({ ok: true }); });
+  admin.post("/devices", (req, res) => {
+    const { token, platform } = deviceBody(req);
+    if (!push.register({ token, admin: true, platform })) return res.status(400).json({ error: "Bad device token." });
+    res.json({ ok: true, enabled: push.enabled });
+  });
+  admin.delete("/devices/:token", (req, res) => { push.unregister(req.params.token); res.json({ ok: true }); });
+  admin.get("/push", (req, res) => res.json({ enabled: push.enabled, ios: push.apns, android: push.fcm, devices: store.read("devices", []).length }));
+  // Visit reminders (day before at 6 PM, and an hour before) for members with the app
+  app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
@@ -1277,6 +1309,7 @@ if (require.main === module) {
   app.set("rt", rt);
   // Live calendar sync: check Google Calendar / SimplePractice every minute (CAL_WATCH_SECONDS, 0 = off)
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
+  setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
 
