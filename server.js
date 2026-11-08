@@ -534,7 +534,9 @@ function createApp(cfg = loadConfig()) {
     const calData = booking.provider === "cal" ? await calInfo(s) : null;
     res.set("Cache-Control", "no-cache");
     res.json({
-      settings: pub, timeZone: cfg.tz, googleClientId: (process.env.GOOGLE_CLIENT_ID || "").trim() || null,
+      settings: pub, timeZone: cfg.tz,
+      // Sign in with Apple on the website needs a Services ID (developer.apple.com → Identifiers → Services IDs)
+      appleServicesId: (process.env.APPLE_SERVICES_ID || "").trim() || null,
       booking: { provider: calData ? "cal" : "builtin", cal: calData },
       options: { goals: GOALS, services: SERVICES.filter((x) => x !== "Group classes"), areas: AREAS, durations: DURATIONS, surgery: SURGERY },
       // kept for older frontends
