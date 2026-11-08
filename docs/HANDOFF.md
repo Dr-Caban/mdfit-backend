@@ -91,7 +91,7 @@ The member app at `/account` is already an API-driven single-page app: every scr
 
 ### A6. Content migration checklist (before either app ships)
 
-- [ ] Move every exercise video off Google Drive to Cloudinary (cloud name is in Railway `CLOUDINARY_CLOUD_NAME`); keep the Drive id → Cloudinary public id map in `app/exercises.js` (`MDFitVideo.onCdn`).
+- [x] Exercise videos are on Cloudinary (278 of 279 assets as of Nov 8 2026; the sync runs 30 s after API start and every 6 h from `/data/media-manifest.json`, built by `scripts/build-media-manifest.js`). Drive files that aren't public are fetched through the Drive API as the service account: share the Drive folder with the account email shown in Admin → Home → Hours & sync (also `GET /api/admin/videos/status` → `driveAccount`). The app's map is `MDFitVideo.onCdn` (`GET /api/videos`).
 - [ ] Re-upload the 0-byte plantar fasciitis videos; add the Drive videos not yet in the library (Cable Row, Walking Lunge, Dead Bug, Wall Posture, Deep Squat Hold, Scalene Release, GOSD intro); film single-leg RDL and wall sit.
 - [ ] Resolve poster conflicts noted in the Tips articles (ice bath frequency, movement reset length, health-shot ratios, "ErG").
 - [ ] Decide elbow program naming (tennis = extensors / golfer's = flexors) and supply the missing Golf week 4 and Pickleball Advanced week 5 sheets.
