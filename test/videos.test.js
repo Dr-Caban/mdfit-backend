@@ -75,6 +75,7 @@ test("media sync: public link via Cloudinary, unshared file via the Drive API, s
   // the shared clip went straight from its URL; the unshared one was fetched through the Drive API and uploaded as bytes
   const byId = (pid) => f.seen.cloudinary.filter((c) => c.public_id.split("/").pop() === pid);
   assert.equal(byId("shared-clip").length, 1); assert.equal(byId("shared-clip")[0].multipart, false);
+  assert.equal(byId("shared-clip")[0].eager, "q_auto,vc_h264"); assert.equal(byId("pattern-1")[0].eager, undefined, "images get no video rendition");
   assert.equal(byId("unshared-clip").length, 2); assert.equal(byId("unshared-clip")[1].multipart, true); assert.equal(byId("unshared-clip")[1].fileBytes, 128);
   assert.deepEqual(f.seen.driveApi, [{ id: "unshared-clip", auth: "Bearer sa-token", alt: "media" }]);
   // the slash became a dash in the display name only; the path is unchanged
