@@ -50,26 +50,6 @@ test("admin video consultation: no past times, and Google Calendar / SimplePract
   assert.equal((await consult({ date: "2026-11-02", time: "18:00" })).status, 201, "later today is fine");
 });
 
-test("booking race: while the calendar is read, a reward code can't be used twice and new reviews aren't lost", async (t) => {
-  const calsync = fakeCalsync();
-  const s = await start({ calsync }); t.after(s.close);
-  const code = (await s.call("POST", "/api/feedback", { name: "Hana Hill", email: "hana@example.com", rating: 5, text: "My shoulder finally feels normal again.", publish: true })).body.rewardCode;
-  const day = (await s.call("GET", "/api/availability?type=plan-review&days=14")).body.days.find((d) => d.slots.length > 2);
-  const book = (time, email) => s.call("POST", "/api/appointments", { typeId: "plan-review", date: day.date, time, name: "Hana Hill", email, phone: "941-555-0101", rewardCode: code });
-  // Both requests wait on the calendar at the same time; a third person leaves a review meanwhile
-  let n = 0;
-  calsync.onBusy = async () => { if (++n === 1) await s.call("POST", "/api/feedback", { name: "Lou Low", email: "lou@example.com", rating: 4, text: "Good sessions, thank you.", publish: false }); await new Promise((r) => setTimeout(r, 50)); };
-  const r = await Promise.all([book(day.slots[0], "hana@example.com"), book(day.slots[2], "hana2@example.com")]);
-  assert.deepEqual(r.map((x) => x.status).sort(), [201, 409]);
-  calsync.onBusy = null;
-  const admin = await s.adminToken();
-  assert.deepEqual((await s.call("GET", "/api/admin/feedback", undefined, admin)).body.map((f) => f.name).sort(), ["Hana Hill", "Lou Low"]);
-  // the same slot booked twice at once: one wins
-  calsync.onBusy = () => new Promise((r2) => setTimeout(r2, 50));
-  const both = await Promise.all(["a", "b"].map((x) => s.call("POST", "/api/appointments", { typeId: "session", date: day.date, time: "15:00", name: "Sam Lee", email: `${x}@example.com`, phone: "941-555-0177" })));
-  assert.deepEqual(both.map((x) => x.status).sort(), [201, 409]);
-});
-
 test("a program note Dr. Jared writes for a client is encrypted at rest and reads back as written", async (t) => {
   const s = await start(); t.after(s.close);
   const admin = await s.adminToken();

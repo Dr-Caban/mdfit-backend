@@ -364,7 +364,7 @@ test("pain tracks are admin-editable and fall back to the built-in set", async (
   assert.deepEqual((await s.call("GET", "/api/content")).body.tracks, [], "reset to built-in");
 });
 
-test("free accounts: unlimited access (ungated); a review gives 30% off the first month", async (t) => {
+test("free accounts: unlimited access (ungated); a review changes nothing about pricing", async (t) => {
   const s = await start(); t.after(s.close);
   const tok = (await signup(s)).body.token;
   let acc = (await s.call("GET", "/api/me/access", undefined, tok)).body;
@@ -373,17 +373,13 @@ test("free accounts: unlimited access (ungated); a review gives 30% off the firs
   assert.equal(g1.body.member, true, "generations always allowed");
   // pain tools stay open
   assert.equal((await s.call("POST", "/api/me/pain", { area: "Neck", level: 4 }, tok)).status, 201);
-  // review -> code linked to the account -> membership request carries 30% off
+  // a review is thanked, nothing more: no code on the account, no discount on a membership request
   const r = await s.call("POST", "/api/feedback", { name: "Pat Doe", email: "pat@example.com", rating: 3, text: "Good so far, still sore some days.", publish: false });
-  assert.equal(r.body.rewardPct, 30);
+  assert.equal(r.status, 201); assert.equal(r.body.rewardCode, undefined);
   acc = (await s.call("GET", "/api/me/access", undefined, tok)).body;
-  assert.equal(acc.reviewCode, r.body.rewardCode);
-  assert.equal((await s.call("POST", "/api/me/membership/request", { tier: "member", rewardCode: "MDFIT-000000" }, tok)).status, 400);
-  const req = await s.call("POST", "/api/me/membership/request", { tier: "premium" }, tok);
-  assert.equal(req.body.request.discountPct, 30);
-  const adm = await s.adminToken(), me = (await s.call("GET", "/api/me", undefined, tok)).body.client;
-  await s.call("PUT", `/api/admin/clients/${me.id}/membership`, { tier: "premium" }, adm);
-  assert.equal((await s.call("GET", `/api/feedback/reward/${r.body.rewardCode}`)).body.used, true, "code is spent when the membership starts");
+  assert.equal(acc.reviewCode, null);
+  const req = await s.call("POST", "/api/me/membership/request", { tier: "premium", rewardCode: "MDFIT-000000" }, tok);
+  assert.equal(req.status, 201); assert.equal(req.body.request.discountPct, undefined, "a pasted code is ignored, never applied");
   assert.equal((await s.call("POST", "/api/me/generations", {}, tok)).body.member, true, "generations always allowed");
 });
 
@@ -486,7 +482,7 @@ test("stripe: membership + protocol checkout, verified webhooks drive access, id
   assert.equal(co.body.url, "https://checkout.stripe.com/c/pay/cs_test");
   const sess = calls.find((c) => c[0] === "session")[1];
   assert.equal(sess.mode, "subscription"); assert.equal(sess.customer, "cus_1");
-  assert.deepEqual(sess.discounts, [{ coupon: "mdfit-review-30" }]);
+  assert.equal(sess.discounts, undefined, "no review coupon any more"); assert.equal(sess.allow_promotion_codes, true);
   assert.equal(sess.payment_method_types, undefined, "dynamic payment methods");
   assert.match(sess.integration_identifier, /^mdfit_membership_[a-z]{8}$/);
   assert.equal(calls.find((c) => c[0] === "price")[1].unit_amount, 20000); // Premium 1-on-1 is $200/month
@@ -495,8 +491,7 @@ test("stripe: membership + protocol checkout, verified webhooks drive access, id
   assert.equal(bad.status, 400); await bad.text();
   // checkout completed + subscription created -> member
   const me = (await s.call("GET", "/api/me", undefined, tok)).body.client;
-  assert.equal((await send({ id: "evt_1", type: "checkout.session.completed", data: { object: { id: "cs_1", mode: "subscription", payment_status: "paid", customer: "cus_1", client_reference_id: me.id, metadata: { kind: "membership", tier: "premium", clientId: me.id, rewardCode: rv.rewardCode } } } })).status, 200);
-  assert.equal((await s.call("GET", `/api/feedback/reward/${rv.rewardCode}`)).body.used, true);
+  assert.equal((await send({ id: "evt_1", type: "checkout.session.completed", data: { object: { id: "cs_1", mode: "subscription", payment_status: "paid", customer: "cus_1", client_reference_id: me.id, metadata: { kind: "membership", tier: "premium", clientId: me.id } } } })).status, 200);
   await send({ id: "evt_2", type: "customer.subscription.created", data: { object: { id: "sub_m", customer: "cus_1", status: "active", metadata: { kind: "membership", tier: "premium" }, items: { data: [{ current_period_end: 1795000000 }] } } } });
   let acc = (await s.call("GET", "/api/me/access", undefined, tok)).body;
   assert.equal(acc.member, true); assert.equal(acc.tier, "premium");

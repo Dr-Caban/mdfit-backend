@@ -573,27 +573,25 @@ function createApp(cfg = loadConfig()) {
     res.json({ ok: true });
   });
 
-  // ---- On-site reviews. Every review, whatever the rating, earns a discount on the first month of membership.
-  // (Google and the FTC don't allow rewards tied to public or positive reviews, so the reward is for honest feedback here.)
-  const reviewPct = () => (settings().plans || {}).reviewDiscountPct ?? 30;
+  // ---- On-site reviews. Plain feedback: no discount, code or free visit for leaving one (owner, Nov 2026: review
+  // incentives run against Google's review policies). Older stored codes are no longer honoured anywhere.
   app.post("/api/feedback", formLimit.mw, honeypot, (req, res) => {
     const f = feedbackInput(req.body);
     const list = feedback();
-    const code = "MDFIT-" + crypto.randomBytes(3).toString("hex").toUpperCase();
-    const pct = reviewPct();
-    const entry = { id: id(), ...f, status: "pending", rewardCode: code, rewardPct: pct, createdAt: new Date().toISOString() };
+    const entry = { id: id(), ...f, status: "pending", createdAt: new Date().toISOString() };
     list.push(entry);
     store.write("feedback", list);
-    // Link the code to their account so the app applies it automatically
-    const cls = store.read("clients", []), cl = cls.find((c) => c.email === f.email.toLowerCase());
-    if (cl && !cl.reviewCode) { cl.reviewCode = code; store.write("clients", cls); }
     activity("feedback", { email: f.email, rating: f.rating });
     const biz = settings().business;
-    const subUrl = `${cfg.siteUrl}/account#premium`;
     // The review text stays out of email (private reviews often describe a condition); it's in Admin → Reviews.
-    notify.owner(`New review: ${f.rating}/5 from ${f.name}`, `${f.name} <${f.email}>\n${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}\n\n${f.publish ? "OK to publish (approve it in Admin → Reviews)." : "Private: do not publish."}\nFor privacy the review itself isn't in this email. Read it in Admin → Reviews:\n${cfg.siteUrl || ""}/admin\n\nReward code: ${code} (${pct}% off first month)`);
-    notify.client(f.email, `Thank you! ${pct}% off your first month`, `Hi ${f.name.split(" ")[0]},\n\nThank you for your feedback. As promised, here's ${pct}% off your first month of MD Fit membership: unlimited workouts, every program, custom plans and messaging with Dr. Jared.\n\nYour code: ${code}\nUse it here: ${subUrl}\n\n${biz.name}\n${biz.phone}`);
-    res.status(201).json({ ok: true, rewardCode: code, rewardPct: pct, subscribeUrl: subUrl, message: `Thank you! Here's ${pct}% off your first month.` });
+    notify.owner(`New review: ${f.rating}/5 from ${f.name}`, `${f.name} <${f.email}>\n${"★".repeat(f.rating)}${"☆".repeat(5 - f.rating)}\n\n${f.publish ? "OK to publish (approve it in Admin → Reviews)." : "Private: do not publish."}\nFor privacy the review itself isn't in this email. Read it in Admin → Reviews:\n${cfg.siteUrl || ""}/admin`);
+    notify.client(f.email, "Thank you for your review", `Hi ${f.name.split(" ")[0]},
+
+Thank you for taking the time to tell us how it's going. Dr. Jared reads every review.${f.publish ? " Once it's approved it may appear on the website with your first name." : ""}
+
+Dr. Jared Caban
+MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
+    res.status(201).json({ ok: true, message: "Thank you! Dr. Jared reads every review." });
   });
   app.get("/api/feedback", (req, res) => {
     const pub = feedback().filter((f) => f.status === "approved" && f.publish)
@@ -601,14 +599,10 @@ function createApp(cfg = loadConfig()) {
       .map((f) => { const [first, last = ""] = f.name.split(/\s+/); return { name: first + (last ? ` ${last[0]}.` : ""), rating: f.rating, text: f.text, date: f.createdAt.slice(0, 10) }; });
     const n = pub.length;
     res.set("Cache-Control", "no-cache");
-    res.json({ reviews: pub, count: n, average: n ? Math.round((pub.reduce((s, f) => s + f.rating, 0) / n) * 10) / 10 : null,
-      reward: { pct: reviewPct(), title: `${reviewPct()}% off your first month` } });
+    res.json({ reviews: pub, count: n, average: n ? Math.round((pub.reduce((s, f) => s + f.rating, 0) / n) * 10) / 10 : null, reward: null });
   });
-  app.get("/api/feedback/reward/:code", (req, res) => {
-    const f = feedback().find((x) => x.rewardCode === String(req.params.code).toUpperCase());
-    if (!f) return res.status(404).json({ error: "That reward code isn't valid." });
-    res.json({ valid: !f.rewardUsedAt, used: !!f.rewardUsedAt, pct: f.rewardPct ?? reviewPct(), name: f.name, email: f.email, type: PLAN_REVIEW });
-  });
+  // Review reward codes were retired (Nov 2026): the lookup answers "no" for every code
+  app.get("/api/feedback/reward/:code", (req, res) => res.status(404).json({ error: "Review reward codes have been retired." }));
 
   // Native apps check this on launch: API version, the oldest app build still supported, and which features are on
   app.get("/api/app/config", (req, res) => {
@@ -640,15 +634,9 @@ function createApp(cfg = loadConfig()) {
     const s = settings();
     const type = s.appointmentTypes.find((t) => t.id === a.typeId) || (a.typeId === PLAN_REVIEW.id ? PLAN_REVIEW : null);
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
-    // The free plan review is a reward: it needs an unused code from a submitted review
-    let reward = null;
-    let fb = type === PLAN_REVIEW ? feedback() : null;
-    if (fb) {
-      const code = String((req.body && req.body.rewardCode) || "").trim().toUpperCase();
-      reward = fb.find((f) => f.rewardCode === code);
-      if (!reward) return res.status(400).json({ error: "That reward code isn't valid. Check the email we sent you." });
-      if (reward.rewardUsedAt) return res.status(409).json({ error: "That reward code has already been used." });
-    }
+    // The free plan review was a review reward; rewards were retired (Nov 2026), so it can't be booked any more
+    if (type === PLAN_REVIEW) return res.status(400).json({ error: "The free plan review is no longer offered. Book an evaluation instead." });
+    let reward = null, fb = null;
     const busy = await calsync.busy(a.date, a.date, { icsUrl: spUrl() });
     // Other requests may have run while we waited for the calendar: the slot check reads appointments fresh, and the
     // reward code is looked up again so two bookings can't both use it (and an older copy of reviews isn't written back)
