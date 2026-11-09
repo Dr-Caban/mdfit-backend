@@ -276,3 +276,31 @@ test("admin overview: one call with everything about a client", async (t) => {
   assert.equal((await s.call("GET", `/api/admin/clients/${a.client.id}/overview`, undefined, a.token)).status, 401);
   assert.equal((await s.call("GET", "/api/admin/clients/nope/overview", undefined, adm)).status, 404);
 });
+
+test("time in app: heartbeats add up per day, sessions split on a 30-minute gap, admin sees minutes", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await member(s, "Pat Doe"), adm = await s.adminToken();
+  s.setDay(day(3), 9);
+  const beat = (body) => s.call("POST", "/api/me/presence", body, a.token);
+  assert.equal((await s.call("POST", "/api/me/presence", { seconds: 10 })).status, 401);
+  let r = await beat({ seconds: 0, view: "home", platform: "web" });           // app opened: a session, no time yet
+  assert.equal(r.body.sessions, 1); assert.equal(r.body.seconds, 0);
+  r = await beat({ seconds: 60, view: "home", platform: "web" }); r = await beat({ seconds: 45, view: "videos", platform: "web" });
+  assert.equal(r.body.sessions, 1, "beats a minute apart are one session"); assert.equal(r.body.seconds, 105);
+  r = await beat({ seconds: 9999, view: "<bad>", platform: "tv" });              // a stuck tab can't inflate; odd values are tamed
+  assert.equal(r.body.seconds, 105 + 120);
+  s.setDay(day(3), 12);                                                         // three hours later: a new session the same day
+  r = await beat({ seconds: 30, view: "pain", platform: "ios" });
+  assert.equal(r.body.sessions, 2); assert.equal(r.body.seconds, 255);
+  s.setDay(day(5), 8); await beat({ seconds: 0, view: "home", platform: "web" }); await beat({ seconds: 120, view: "home", platform: "web" });
+  s.setDay(day(6), 8);
+  const row = (await s.call("GET", "/api/admin/clients", undefined, adm)).body.find((x) => x.id === a.client.id);
+  assert.equal(row.minutes30, 6, "255 s + 120 s = 6 minutes, rounded per day (4 + 2)");
+  const o = (await s.call("GET", `/api/admin/clients/${a.client.id}/overview`, undefined, adm)).body;
+  assert.equal(o.time.last30.minutes, 6); assert.equal(o.time.last30.sessions, 3); assert.equal(o.time.last30.daysOpened, 2); assert.equal(o.time.last30.avgMinutesPerDay, 3);
+  assert.deepEqual(o.time.last30.views[0], { view: "home", minutes: 3 }); assert.deepEqual(o.time.last30.platforms.map((p) => p.platform).sort(), ["ios", "web"]);
+  assert.equal(o.time.last30.lastView, "home"); assert.ok(o.time.last30.lastSeenAt);
+  const act = (await s.call("GET", `/api/admin/clients/${a.client.id}/activity?days=7`, undefined, adm)).body;
+  const d3 = act.days.find((d) => d.date === day(3)), d5 = act.days.find((d) => d.date === day(5));
+  assert.equal(d3.minutes, 4); assert.equal(d3.opened, true); assert.equal(d5.minutes, 2); assert.equal(act.summary.minutes30, 6); assert.equal(act.summary.opened30, 2);
+});
