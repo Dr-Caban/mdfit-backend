@@ -259,3 +259,53 @@ test("an older account without a referral code gets one that stays the same", as
   await signup(s, { email: "friend@example.com", referralCode: a });
   assert.equal((await s.call("GET", "/api/me/referral", undefined, T)).body.referrals, 1);
 });
+
+test("stripe: a paying member is recognised without the webhook (checkout confirm, then reconcile from Stripe)", async (t) => {
+  const Stripe = require("stripe");
+  const real = new Stripe("sk_test_fake", { apiVersion: "2026-10-28.endive" });
+  const sub = { id: "sub_acc", customer: "cus_9", status: "active", metadata: { kind: "membership", tier: "accountability", clientId: "" }, cancel_at_period_end: false,
+    items: { data: [{ current_period_end: 1796000000 }] } };
+  const session = { id: "cs_live_1", object: "checkout.session", mode: "subscription", status: "complete", payment_status: "paid", customer: "cus_9", client_reference_id: "",
+    amount_subtotal: 2995, amount_total: 2097, currency: "usd", total_details: { amount_discount: 898 }, subscription: sub, metadata: { kind: "membership", tier: "accountability", rewardCode: "" } };
+  let listed = 0, mails = [];
+  const fake = {
+    webhooks: real.webhooks,
+    customers: { create: async () => ({ id: "cus_9" }) },
+    prices: { list: async () => ({ data: [{ id: "price_acc" }] }) },
+    coupons: { retrieve: async (id) => ({ id }) },
+    checkout: { sessions: { create: async () => ({ id: "cs_live_1", url: "https://checkout.stripe.com/c/pay/x" }), retrieve: async (id) => (id === "cs_live_1" ? session : Promise.reject(new Error("No such session"))) } },
+    subscriptions: { list: async () => (listed++, { data: [sub] }) }
+  };
+  const s = await start({ stripeClient: fake, stripeWebhookSecret: "whsec_x" }); t.after(s.close);
+  const tok = (await signup(s)).body.token;
+  const me = (await s.call("GET", "/api/me", undefined, tok)).body.client;
+  sub.metadata.clientId = me.id; session.client_reference_id = me.id;
+  // not a member yet
+  assert.equal((await s.call("GET", "/api/me/content", undefined, tok)).body.access, "free");
+  // start checkout (gives the account its Stripe customer), then the site comes back and confirms with the session id
+  assert.equal((await s.call("POST", "/api/me/checkout/membership", { tier: "accountability" }, tok)).status, 200);
+  assert.notEqual((await s.call("POST", "/api/me/checkout/confirm", { session_id: "cs_nope" }, tok)).status, 200, "unknown session is refused");
+  const r = await s.call("POST", "/api/me/checkout/confirm", { session_id: "cs_live_1" }, tok);
+  assert.equal(r.status, 200); assert.equal(r.body.paid, true); assert.equal(r.body.membership.tier, "accountability"); assert.equal(r.body.membership.stripeSubscriptionId, "sub_acc");
+  assert.equal(r.body.amountTotal, 2097); assert.equal(r.body.discount, 898);
+  assert.equal((await s.call("GET", "/api/me/content", undefined, tok)).body.access, "member");
+  assert.equal((await s.call("GET", "/api/me/payments", undefined, tok)).body.membership.tier, "accountability");
+  // someone else can't confirm my session
+  const other = (await signup(s, { email: "lee@example.com" })).body.token;
+  assert.equal((await s.call("POST", "/api/me/checkout/confirm", { session_id: "cs_live_1" }, other)).status, 403);
+  // the webhook arriving later doesn't send a second receipt or break anything
+  const payload = JSON.stringify({ id: "evt_late", type: "checkout.session.completed", data: { object: { ...session, subscription: "sub_acc" } } });
+  const wh = await fetch(s.base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": real.webhooks.generateTestHeaderString({ payload, secret: "whsec_x" }) }, body: payload });
+  assert.equal(wh.status, 200); await wh.json();
+
+  // Reconcile: a paying customer whose record shows no membership (the webhook never came) gets it from Stripe on the
+  // next request. Lee has a Stripe customer but nothing on file.
+  const clients = s.readJson("clients"); clients.find((c) => c.email === "lee@example.com").stripeCustomerId = "cus_9"; s.writeJson("clients", clients);
+  const before = listed;
+  assert.equal((await s.call("GET", "/api/me/content", undefined, other)).body.access, "member", "re-read from Stripe");
+  assert.equal(listed, before + 1);
+  assert.equal((await s.call("GET", "/api/me/payments", undefined, other)).body.membership.stripeSubscriptionId, "sub_acc");
+  // and Stripe isn't asked again on every request once the member is live
+  await s.call("GET", "/api/me/content", undefined, other);
+  assert.equal(listed, before + 1);
+});

@@ -146,7 +146,7 @@ test("challenges: sender +5 once a day, recipient 30 + 10 = 40, once per challen
   r = await s.call("POST", "/api/me/challenges", { workoutId: mine.id, toId: kim.id }, a.token);
   assert.equal(r.status, 201); assert.equal(r.body.xpEarned, 0, "+5 once a day");
   let ar = await rw(s, a.token);
-  assert.equal(ar.todayParts.workouts, 5); assert.equal(ar.xp, 10 + 5);
+  assert.equal(ar.todayParts.workouts, 5); assert.equal(ar.xp, 5 + 5); // prayer check-in 5 + challenge sent 5
   // the auto item shows as done for the sender
   assert.equal((await s.call("GET", "/api/me/habits/today", undefined, a.token)).body.habits.find((h) => h.id === "challenge-send").done, true);
 
@@ -198,14 +198,14 @@ test("overall ranking: #N by lifetime XP on rewards, an all-leagues all-time boa
   const s = await start(); t.after(s.close);
   const a = await member(s, "Pat Doe"), b = await member(s, "Lee Park"), c = await member(s, "Kim Ray");
   await log(s, a.token); // 55
-  await s.call("POST", "/api/me/habits/checkin", { habitId: "yoga" }, b.token); // 20
+  await s.call("POST", "/api/me/habits/checkin", { habitId: "yoga" }, b.token); // 10
   await log(s, c.token, { key: "prog-shoulder-6-d0" }); // 75
   let r = await rw(s, a.token);
   assert.deepEqual(r.overall, { rank: 2, total: 3, hidden: false });
   assert.equal(r.rank.current.name, "Amber"); assert.equal(r.rank.xpToNext, 501 - 55);
   const board = (await s.call("GET", "/api/me/leaderboard?period=all&league=all", undefined, a.token)).body;
   assert.equal(board.league, "all");
-  assert.deepEqual(board.top.map((x) => [x.rank, x.name, x.score, x.gem.name]), [[1, "Kim R.", 75, "Amber"], [2, "Pat D.", 55, "Amber"], [3, "Lee P.", 20, "Peridot"]]);
+  assert.deepEqual(board.top.map((x) => [x.rank, x.name, x.score, x.gem.name]), [[1, "Kim R.", 75, "Amber"], [2, "Pat D.", 55, "Amber"], [3, "Lee P.", 10, "Peridot"]]);
   assert.equal(board.me.rank, r.overall.rank, "Home's #N matches the full board");
   assert.equal(board.olympicGem, "Emerald");
   // a hidden member still sees their own rank privately and isn't counted for others
@@ -216,23 +216,23 @@ test("overall ranking: #N by lifetime XP on rewards, an all-leagues all-time boa
   assert.equal(d.rewards.xp, 55); assert.equal(d.rewards.gem.name, "Amber"); assert.equal(d.rewards.overall.rank >= 1, true);
 });
 
-test("accountability membership: $1 off per active day, 20 days takes $30 down to the $10 floor", async (t) => {
+test("accountability membership: $1 off per active day, 20 days takes $29.95 down to the $10 floor", async (t) => {
   const s = await start(); t.after(s.close);
   const a = await member(s, "Pat Doe");
   await s.call("PUT", `/api/admin/clients/${a.client.id}/membership`, { tier: "accountability", until: "2027-12-31" }, await s.adminToken());
   s.setDay(day(1));
   let r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
-  assert.equal(r.enabled, true); assert.equal(r.price, 30); assert.equal(r.floor, 10); assert.equal(r.credit, 0); assert.equal(r.owed, 30);
+  assert.equal(r.enabled, true); assert.equal(r.price, 29.95); assert.equal(r.floor, 10); assert.equal(r.credit, 0); assert.equal(r.owed, 29.95);
   for (let d = 1; d <= 3; d++) { s.setDay(day(d)); await log(s, a.token); }
   r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
-  assert.equal(r.activeDays, 3); assert.equal(r.credit, 3); assert.equal(r.owed, 27); assert.equal(r.atFloor, false);
+  assert.equal(r.activeDays, 3); assert.equal(r.credit, 3); assert.equal(r.owed, 26.95); assert.equal(r.atFloor, false);
   for (let d = 4; d <= 25; d++) { s.setDay(day(d)); await log(s, a.token); }
   r = (await s.call("GET", "/api/me/accountability", undefined, a.token)).body;
-  assert.equal(r.activeDays, 25); assert.equal(r.credit, 20, "credit stops at 20 days"); assert.equal(r.owed, 10, "never below the floor"); assert.equal(r.atFloor, true); assert.equal(r.free, false);
+  assert.equal(r.activeDays, 25); assert.equal(r.credit, 19.95, "credit stops at 20 days and at the floor"); assert.equal(r.owed, 10, "never below the floor"); assert.equal(r.atFloor, true); assert.equal(r.free, false);
   // the flat membership has no credit
   await s.call("PUT", `/api/admin/clients/${a.client.id}/membership`, { tier: "member", until: "2027-12-31" }, await s.adminToken());
   assert.equal((await s.call("GET", "/api/me/accountability", undefined, a.token)).body.enabled, false);
   // the default lineup the app shows
   const tiers = (await s.call("GET", "/api/content")).body.tiers;
-  assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 20, 0], ["accountability", 30, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
+  assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 19.95, 0], ["accountability", 29.95, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
 });
