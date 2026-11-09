@@ -251,6 +251,21 @@ function createApp(cfg = loadConfig()) {
     store.write("settings", s);
   })();
 
+  // The returning-patient video follow-up is 30 minutes for $80 (owner spec, Nov 2026). Replaces only the previous
+  // prorated default of $75, so a price the owner set by hand in Admin stays as it is.
+  (function followup80() {
+    const s = store.read("settings", null);
+    if (!s || s.followup80) return;
+    for (const t of s.appointmentTypes || []) {
+      if (t.id === "followup-remote" && /\$75\b/.test(t.description || "")) t.description = t.description.replace(/\$75\b/, () => "$80");
+    }
+    for (const v of s.services || []) {
+      if (v.id === "followup-remote" && v.rate === 75) v.rate = 80;
+    }
+    s.followup80 = true;
+    store.write("settings", s);
+  })();
+
   const classes = () => {
     let list = store.read("classes", null);
     if (list === null) {
@@ -391,12 +406,17 @@ function createApp(cfg = loadConfig()) {
     }
     return out;
   }
+  // A slot a member is paying for right now is held for a few minutes so a second member can't take it; the hold
+  // stops blocking the time by itself if the payment is never finished.
+  const holdLive = (a) => !a.holdUntil || a.holdUntil > new Date().toISOString();
+  const liveAppt = (a) => a.status !== "cancelled" && (a.status !== "hold" || holdLive(a));
+
   function openSlots(type, date, s = settings(), busy = []) {
     const sch = s.scheduling;
     const { date: today } = nowParts(cfg.tz, cfg.now());
     if (date < today || date > addDays(today, sch.daysAhead) || sch.blockedDates.includes(date)) return [];
     const cutoff = nowParts(cfg.tz, new Date(cfg.now().getTime() + sch.minNoticeHours * 3600e3));
-    const taken = appointments().filter((a) => a.date === date && a.status !== "cancelled")
+    const taken = appointments().filter((a) => a.date === date && liveAppt(a))
       .map((a) => [toMin(a.time), toMin(a.time) + a.minutes]).concat(busyOn(date, busy));
     const slots = [];
     for (const [start, end] of sch.hours[weekday(date)] || []) {
@@ -929,7 +949,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const { date: today } = nowParts(cfg.tz, cfg.now());
     const all = req.query.all === "1";
     const byId = new Map(store.read("clients", []).map((c) => [c.id, c]));
-    res.json(appointments().filter((a) => all || (a.date >= today && a.status !== "cancelled"))
+    res.json(appointments().filter((a) => a.status !== "hold" && (all || (a.date >= today && a.status !== "cancelled")))
       .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1) * (all ? -1 : 1))
       .map(({ cancelToken, ...a }) => ({ ...a, documents: packetStatus(a, a.clientId ? byId.get(a.clientId) : null) })));
   });
@@ -1277,7 +1297,65 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   mountSearch({ app, admin, store, limiter, logger: typeof logger !== "undefined" ? logger : null });
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
-  require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, ...cl });
+  // A patient scheduling and paying for their own video visit (Medical record). The slot is held while Stripe takes the
+  // payment, so two patients can never land on the same time, and a checkout nobody finishes lets the hold lapse.
+  const emrBooking = {
+    // Dr. Jared's open start times, his calendar included
+    openings: async (type, from, days) => {
+      const s = settings(), { date: t0 } = nowParts(cfg.tz, cfg.now());
+      const start = /^\d{4}-\d{2}-\d{2}$/.test(from) && from > t0 ? from : t0;
+      const n = Math.min(31, Math.max(1, days));
+      const busy = await calsync.busy(start, addDays(start, n - 1), { icsUrl: spUrl() });
+      const out = [];
+      for (let i = 0; i < n; i++) { const date = addDays(start, i); const slots = openSlots(type, date, s, busy); if (slots.length) out.push({ date, slots }); }
+      return out;
+    },
+    // Take the time. Checked against the calendar and against anything booked while we were waiting.
+    hold: async ({ client, type, date, time, minutes, link, status, payment, service }) => {
+      const s = settings();
+      const busy = await calsync.busy(date, date, { icsUrl: spUrl() });
+      if (!openSlots(type, date, s, busy).includes(time)) return { ok: false, status: 409, error: "That time was just taken. Pick another." };
+      const appt = { id: id(), typeId: type.id, typeName: type.name, minutes, date, time, name: client.name, email: client.email, phone: client.phone || "",
+        notes: "", areas: [], painLevel: null, status, adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
+        source: "patient", clientId: client.id, meetingLink: link, payment, paidService: payment === "paid" ? service : undefined,
+        ...(status === "hold" ? { holdUntil: new Date(Date.now() + 20 * 60 * 1000).toISOString() } : {}) };
+      const list = appointments(); list.push(appt); store.write("appointments", list);
+      if (status === "booked") afterPatientBooking(appt, client);
+      const { cancelToken, ...out } = appt;
+      return { ok: true, appointment: out };
+    },
+    // Stripe says it is paid: the hold becomes a booking, and the patient gets the time and the link
+    confirm: (apptId, client) => {
+      const list = appointments(), a = list.find((x) => x.id === apptId);
+      if (!a || a.status === "cancelled") return null;
+      if (a.status === "hold") { a.status = "booked"; delete a.holdUntil; }
+      a.payment = "paid"; a.updatedAt = new Date().toISOString();
+      store.write("appointments", list);
+      afterPatientBooking(a, client);
+      return { id: a.id, date: a.date, time: a.time, minutes: a.minutes, typeName: a.typeName, meetingLink: a.meetingLink || "" };
+    },
+    // The checkout was closed, or never finished: let the time go
+    release: (apptId, clientId) => {
+      const list = appointments(), a = list.find((x) => x.id === apptId && x.status === "hold" && (!clientId || x.clientId === clientId));
+      if (!a) return false;
+      a.status = "cancelled"; a.heldOnly = true; a.updatedAt = new Date().toISOString();
+      store.write("appointments", list);
+      return true;
+    }
+  };
+  // Confirmed: the calendar, the live admin view, the email and the phone notification
+  function afterPatientBooking(appt, client) {
+    const s = settings(), when = `${prettyDate(appt.date)} at ${prettyTime(appt.time)}`;
+    activity("visit_scheduled", { email: appt.email, typeId: appt.typeId, date: appt.date, when, id: appt.id });
+    const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(appt.date);
+    syncBooking(appt);
+    if (client) push.toClient(client.id, { title: "Your video visit is booked", body: `${appt.typeName}, ${when}. Tap for the link.`, route: "home", thread: "appointments" });
+    notify.client(appt.email, `Your video visit with Dr. Jared: ${when}`,
+      `Hi ${String(appt.name || "there").split(" ")[0]},\n\nYour ${appt.minutes}-minute ${appt.typeName.toLowerCase()} is booked for ${when}.\n\nJoin here at that time:\n${appt.meetingLink}\n\nPlease join from a quiet, private room. The link is also in your MD Fit account under Appointments.\n\n${s.business.name}`);
+    notify.owner(`Video visit booked: ${appt.name}`, `${appt.name} (${appt.email}) booked ${appt.typeName} on ${when} and paid online.`);
+  }
+
+  require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, ...cl });
 
   app.use("/api/admin", admin);
 
