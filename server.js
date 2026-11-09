@@ -1024,6 +1024,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const appt = { id: id(), typeId: "consult-video", typeName, minutes, date: b.date, time: b.time, name: c.name, email: c.email, phone: c.phone || "",
       notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
       source: "admin", clientId: c.id, meetingLink: link, payment: c.clientType === "inpatient" ? "exempt" : "none" };
+    // A video visit the patient already paid for through Stripe (Admin → Medical record) is used up by this booking
+    { const emr = app.get("emrApi"); const cr = emr && appt.payment !== "exempt" ? emr.useCredit(c, appt.id) : null; if (cr) { appt.payment = "paid"; appt.paidService = cr.service; } }
     const list = appointments(); list.push(appt); store.write("appointments", list);
     activity("consult_scheduled", { email: c.email, date: b.date });
     const rt = app.get("rt"); if (rt) rt.emitBookingUpdate(b.date);
@@ -1274,6 +1276,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   mountVideos({ app, admin, store, cfg, logger: typeof logger !== "undefined" ? logger : null });
   mountSearch({ app, admin, store, limiter, logger: typeof logger !== "undefined" ? logger : null });
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });
+  // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
+  require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, ...cl });
 
   app.use("/api/admin", admin);
 
