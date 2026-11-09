@@ -39,7 +39,7 @@ const check = (s, tok, habitId) => s.call("POST", "/api/me/habits/checkin", { ha
 const checkAll = async (s, tok, ids) => { let r; for (const id of ids) r = await check(s, tok, id); return r; };
 const workout = (s, tok, over = {}) => s.call("POST", "/api/me/workouts", { title: "Full Body Power", goal: "Full Body", minutes: 30, exercises: 8, ...over }, tok);
 const day = (n) => `2026-11-${String(n).padStart(2, "0")}`;
-const goalDay = async (s, tok) => { await workout(s, tok); return check(s, tok, "yoga"); }; // 30 + 20 = Beginner 50
+const goalDay = async (s, tok) => { await workout(s, tok); return checkAll(s, tok, ["yoga", "ice-bath"]); }; // 30 + 10 + 10 = Beginner 50
 const xpOf = async (s, tok) => (await s.call("GET", "/api/me/rewards", undefined, tok)).body;
 
 test("owner's activity list: exact XP, once a day, undo the same day, feeds lifetime XP", async (t) => {
@@ -50,8 +50,9 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.equal(first.date, "2026-11-02");
   assert.equal(first.points, 0); assert.equal(first.goal, 50); assert.equal(first.goalLevel, "beginner");
   assert.deepEqual(first.goalLevels, { beginner: 50, intermediate: 75, pro: 100 });
-  const want = { sunlight: 15, acupressure: 15, "foam-rolling": 15, "ice-bath": 20, "health-shot": 5, prayer: 10, meditation: 10, grounding: 5, "box-breathing": 5,
-    walk: 15, sauna: 15, stretching: 5, yoga: 20, "no-screens": 15, massage: 20, journaling: 5, "red-light": 10, "active-recreation": 10, "challenge-send": 5, "challenge-do": 10 };
+  // Owner's rule: 5 XP, or 10 for the demanding ones
+  const want = { sunlight: 5, acupressure: 10, "foam-rolling": 10, "ice-bath": 10, "health-shot": 5, prayer: 5, meditation: 5, grounding: 5, "box-breathing": 5,
+    walk: 5, sauna: 5, stretching: 5, yoga: 10, "no-screens": 10, massage: 5, journaling: 5, "red-light": 5, "active-recreation": 10, "challenge-send": 5, "challenge-do": 10 };
   assert.deepEqual(Object.fromEntries(first.habits.map((h) => [h.id, h.points])), want);
   assert.ok(first.habits.every((h) => h.how.length > 5), "every activity has a how line");
   assert.match(first.habits.find((h) => h.id === "sunlight").how, /20 minutes/);
@@ -59,21 +60,21 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.deepEqual(first.workoutRules, { normal: 30, custom: 35, program: 50, challengeBonus: 10, challengeSent: 5 });
 
   let r = await check(s, tok, "sunlight");
-  assert.equal(r.status, 201); assert.equal(r.body.points, 15); assert.equal(r.body.checked.earned, 15);
+  assert.equal(r.status, 201); assert.equal(r.body.points, 5); assert.equal(r.body.checked.earned, 5);
   r = await check(s, tok, "sunlight");
   assert.equal(r.status, 409); assert.equal(r.body.duplicate, true, "once a day");
   assert.equal((await check(s, tok, "nope")).status, 400);
   assert.equal((await check(s, tok, "challenge-do")).status, 409, "challenge items are earned by the challenge flow, not by ticking");
   // no caps: every activity counts in full
-  r = await checkAll(s, tok, ["ice-bath", "yoga", "massage", "sauna", "acupressure", "foam-rolling"]);
-  assert.equal(r.body.points, 15 + 20 + 20 + 20 + 15 + 15 + 15);
+  r = await checkAll(s, tok, ["ice-bath", "yoga", "massage", "sauna", "acupressure", "foam-rolling", "no-screens", "active-recreation"]);
+  assert.equal(r.body.points, 5 + 10 + 10 + 5 + 5 + 10 + 10 + 10 + 10);
   assert.equal(r.body.qualifying, true);
-  assert.equal((await xpOf(s, tok)).todayParts.activities, 120);
+  assert.equal((await xpOf(s, tok)).todayParts.activities, 75);
 
   // undo today's check; undoing something not checked is a 404; XP follows
   r = await s.call("DELETE", "/api/me/habits/checkin/sunlight", undefined, tok);
-  assert.equal(r.status, 200); assert.equal(r.body.points, 105);
-  assert.equal((await xpOf(s, tok)).todayParts.activities, 105);
+  assert.equal(r.status, 200); assert.equal(r.body.points, 70);
+  assert.equal((await xpOf(s, tok)).todayParts.activities, 70);
   assert.equal((await s.call("DELETE", "/api/me/habits/checkin/sunlight", undefined, tok)).status, 404);
   // a new day (clinic time zone): the same activity can be claimed again; yesterday's can't be undone
   s.setDay(day(2), 23); // 11 PM in Sarasota is already Nov 3 in UTC, still Nov 2 at the clinic
@@ -83,8 +84,8 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.equal((await check(s, tok, "walk")).status, 201);
   assert.equal((await s.call("DELETE", "/api/me/habits/checkin/sauna", undefined, tok)).status, 404);
   const x = await xpOf(s, tok);
-  assert.equal(x.todayParts.activities, 15);
-  assert.equal(x.xp, 105 + 15 + 15, "lifetime XP = every claimed activity");
+  assert.equal(x.todayParts.activities, 5);
+  assert.equal(x.xp, 70 + 5 + 5, "lifetime XP = every claimed activity");
   // stored apart from the client record, with ids, dates and XP only
   const raw = JSON.parse(fs.readFileSync(path.join(s.dataDir, "habits.json"), "utf8"));
   assert.equal(raw.length, 1); assert.ok(raw[0].checks.every((c) => Object.keys(c).sort().join() === "at,date,habitId,points"));
@@ -93,7 +94,7 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
 test("admins edit the list; past checks keep the XP they were earned with", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
-  await check(s, tok, "prayer"); // 10
+  await check(s, tok, "prayer"); // 5
   const at = await s.adminToken();
   assert.equal((await s.call("GET", "/api/admin/habits", undefined, tok)).status, 401);
   const cfg = (await s.call("GET", "/api/admin/habits", undefined, at)).body;
@@ -104,11 +105,11 @@ test("admins edit the list; past checks keep the XP they were earned with", asyn
   assert.equal(r.body.habits.find((h) => h.id === "prayer").points, 25);
   assert.equal(r.body.habits.find((h) => h.id === "challenge-do").points, 10, "challenge XP is fixed by the rules");
   assert.equal(r.body.dailyGoal, 40);
-  assert.equal((await today(s, tok)).body.points, 10, "today's earlier check keeps its 10");
+  assert.equal((await today(s, tok)).body.points, 5, "today's earlier check keeps its 5");
   assert.equal((await check(s, tok, "sleep")).status, 201);
   s.setDay(day(3));
   assert.equal((await check(s, tok, "prayer")).body.points, 25);
-  assert.equal((await xpOf(s, tok)).xp, 10 + 10 + 25);
+  assert.equal((await xpOf(s, tok)).xp, 5 + 10 + 25);
   // validation
   assert.match((await s.call("PUT", "/api/admin/habits", { habits: cfg.habits.filter((h) => h.id !== "challenge-send") }, at)).body.error, /Keep the "challenge-send"/);
   assert.equal((await s.call("PUT", "/api/admin/habits", { habits: [{ ...cfg.habits[0], points: 500 }, ...cfg.habits.slice(1)] }, at)).status, 400);
@@ -124,13 +125,13 @@ test("daily XP norms: Beginner 50, Intermediate 75, Pro 100; a day qualifies on 
   const { token: tok } = await signup(s);
   let r = (await checkAll(s, tok, ["grounding", "box-breathing", "journaling"])).body; // 15
   assert.equal(r.goal, 50); assert.equal(r.qualifying, false); assert.equal(r.remaining, 35);
-  r = (await checkAll(s, tok, ["sunlight", "ice-bath"])).body; // 50
+  r = (await checkAll(s, tok, ["sunlight", "ice-bath", "yoga", "no-screens", "acupressure"])).body; // 15 + 5 + 10 + 10 + 10 = 50
   assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, true);
   s.setDay(day(3));
   await workout(s, tok);
   r = (await today(s, tok)).body;
   assert.equal(r.workoutXp, 30); assert.equal(r.total, 30); assert.equal(r.qualifying, false, "one 30-XP workout is short of the Beginner 50");
-  r = (await check(s, tok, "ice-bath")).body;
+  r = (await checkAll(s, tok, ["ice-bath", "yoga"])).body;
   assert.equal(r.total, 50); assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, false);
   // raise the norm: applies from today, past goal days stay goal days
   r = (await s.call("PUT", "/api/me/habits/goal", { level: "intermediate" }, tok)).body;
@@ -181,13 +182,13 @@ test("month history lists qualifying days, future days and today's partial", asy
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
   s.setDay(day(2)); await goalDay(s, tok);
-  s.setDay(day(3)); await check(s, tok, "walk"); // 15 < 50
+  s.setDay(day(3)); await check(s, tok, "walk"); // 5 < 50
   s.setDay(day(4)); await today(s, tok);
   const h = (await s.call("GET", "/api/me/habits/history?month=2026-11", undefined, tok)).body;
   assert.equal(h.month, "2026-11"); assert.equal(h.days.length, 30);
   assert.equal(h.qualifyingDays, 1);
   assert.equal(h.days[0].points, 0); assert.equal(h.days[0].missed, false, "before the first activity nothing is missed");
-  assert.deepEqual([h.days[1].qualifying, h.days[2].qualifying, h.days[2].points, h.days[2].missed], [true, false, 15, true]);
+  assert.deepEqual([h.days[1].qualifying, h.days[2].qualifying, h.days[2].points, h.days[2].missed], [true, false, 5, true]);
   assert.equal(h.days[3].today, true); assert.equal(h.days[3].missed, false);
   assert.equal(h.days[4].future, true);
   const oct = (await s.call("GET", "/api/me/habits/history?month=2026-10", undefined, tok)).body;
