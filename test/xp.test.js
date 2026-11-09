@@ -236,3 +236,22 @@ test("accountability membership: $1 off per active day, 20 days takes $29.95 dow
   const tiers = (await s.call("GET", "/api/content")).body.tiers;
   assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 19.95, 0], ["accountability", 29.95, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
 });
+
+test("admin sees each client's activity: the 30-day count in the list and a day-by-day series on the profile", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await member(s, "Pat Doe"), adm = await s.adminToken();
+  s.setDay(day(1)); await log(s, a.token);
+  s.setDay(day(2)); await log(s, a.token); await s.call("POST", "/api/me/habits/checkin", { habitId: "prayer" }, a.token);
+  s.setDay(day(4)); await s.call("POST", "/api/me/pain", { area: "Knee", level: 4 }, a.token);
+  s.setDay(day(6)); await s.call("POST", "/api/me/habits/checkin", { habitId: "yoga" }, a.token);
+  s.setDay(day(10));
+  const row = (await s.call("GET", "/api/admin/clients", undefined, adm)).body.find((x) => x.id === a.client.id);
+  assert.equal(row.active30, 4, "4 distinct active days: workout, workout + check-in, pain log, check-in");
+  const r = (await s.call("GET", `/api/admin/clients/${a.client.id}/activity?days=10`, undefined, adm)).body;
+  assert.equal(r.days.length, 10); assert.equal(r.days[0].date, day(1)); assert.equal(r.days[9].date, day(10));
+  assert.deepEqual(r.days.map((d) => d.active), [true, true, false, true, false, true, false, false, false, false]);
+  assert.equal(r.days[0].workouts, 1); assert.equal(r.days[0].xp, 30); assert.equal(r.days[1].xp, 35, "workout 30 + prayer 5"); assert.equal(r.days[3].pain, 1); assert.equal(r.days[3].xp, 0);
+  assert.equal(r.summary.active30, 4); assert.equal(r.summary.lastActive, day(6)); assert.equal(r.summary.firstActive, day(1)); assert.equal(r.summary.workouts30, 2);
+  assert.equal((await s.call("GET", "/api/admin/clients/nope/activity", undefined, adm)).status, 404);
+  assert.equal((await s.call("GET", `/api/admin/clients/${a.client.id}/activity`, undefined, a.token)).status, 401, "members can't read it");
+});
