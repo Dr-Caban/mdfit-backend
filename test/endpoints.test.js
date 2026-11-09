@@ -308,4 +308,11 @@ test("stripe: a paying member is recognised without the webhook (checkout confir
   // and Stripe isn't asked again on every request once the member is live
   await s.call("GET", "/api/me/content", undefined, other);
   assert.equal(listed, before + 1);
+  // a membership an admin granted by hand gets linked to the Stripe subscription it belongs to
+  const third = (await signup(s, { email: "kim@example.com" })).body.token;
+  const kim = (await s.call("GET", "/api/me", undefined, third)).body.client;
+  await s.call("PUT", `/api/admin/clients/${kim.id}/membership`, { tier: "member", until: "2027-12-31" }, await s.adminToken());
+  const list2 = s.readJson("clients"); list2.find((c) => c.id === kim.id).stripeCustomerId = "cus_9"; s.writeJson("clients", list2);
+  const pm = (await s.call("GET", "/api/me/payments", undefined, third)).body.membership;
+  assert.equal(pm.stripeSubscriptionId, "sub_acc"); assert.equal(pm.tier, "accountability");
 });
