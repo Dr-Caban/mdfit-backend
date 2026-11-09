@@ -255,3 +255,24 @@ test("admin sees each client's activity: the 30-day count in the list and a day-
   assert.equal((await s.call("GET", "/api/admin/clients/nope/activity", undefined, adm)).status, 404);
   assert.equal((await s.call("GET", `/api/admin/clients/${a.client.id}/activity`, undefined, a.token)).status, 401, "members can't read it");
 });
+
+test("admin overview: one call with everything about a client", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await paying(s, "Pat Doe"), b = await member(s, "Lee Park"), adm = await s.adminToken();
+  s.setDay(day(2)); await log(s, a.token); await s.call("POST", "/api/me/habits/checkin", { habitId: "prayer" }, a.token);
+  const mine = (await s.call("POST", "/api/me/custom-workouts", { name: "Pat's burner", exercises: EX }, a.token)).body.saved;
+  await s.call("POST", "/api/me/challenges", { workoutId: mine.id, toId: b.client.id }, a.token);
+  s.setDay(day(3)); await log(s, a.token, { key: `custom-${mine.id}` }); await s.call("POST", "/api/me/pain", { area: "Knee", level: 5 }, a.token);
+  s.setDay(day(5)); await s.call("POST", "/api/me/pain", { area: "Knee", level: 3 }, a.token); await s.call("PUT", "/api/me/favorites/1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", {}, a.token);
+  const ov = await s.call("GET", `/api/admin/clients/${a.client.id}/overview`, undefined, adm); assert.equal(ov.status, 200, JSON.stringify(ov.body)); const o = ov.body;
+  assert.equal(o.client.name, "Pat Doe"); assert.equal(o.membership.tier, "member");
+  assert.equal(o.workouts.total, 2); assert.deepEqual(o.workouts.byKind, { program: 0, custom: 1, challenge: 0, normal: 1 }); assert.equal(o.workouts.recent[0].kind, "custom");
+  assert.ok(o.rewards.xp >= 30 + 5 + 5 + 35, "normal 30 + prayer 5 + challenge sent 5 + custom 35, plus badge bonuses"); assert.equal(o.rewards.gem.name, "Amber"); assert.ok(o.rewards.badges.length >= 1);
+  assert.equal(o.challenges.sent, 1); assert.equal(o.challenges.recent[0].with, "Lee P.");
+  assert.equal(o.pain.entries, 2); assert.equal(o.pain.trend, "improving"); assert.equal(o.favorites, 1);
+  assert.equal(o.habits.top30[0].name.toLowerCase().includes("prayer"), true); assert.equal(o.habits.goalLevel, "beginner");
+  assert.equal(o.activity.days.length, 90); assert.equal(o.activity.summary.active30, 3);
+  assert.equal(o.programs.builtWorkouts.length, 1); assert.equal(o.documents.total > 0, true); assert.equal(o.appointments.completed, 0);
+  assert.equal((await s.call("GET", `/api/admin/clients/${a.client.id}/overview`, undefined, a.token)).status, 401);
+  assert.equal((await s.call("GET", "/api/admin/clients/nope/overview", undefined, adm)).status, 404);
+});

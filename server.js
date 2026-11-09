@@ -1294,7 +1294,7 @@ function createApp(cfg = loadConfig()) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Invalid JSON." });
     if (err.type === "entity.too.large") return res.status(413).json({ error: "Request too large." });
-    logger.error("server_error", { path: req.path, error: err.message });
+    logger.error("server_error", { path: req.path, error: err.message, ...(process.env.NODE_ENV === "test" ? { stack: err.stack } : {}) });
     res.status(500).json({ error: "Something went wrong. Try again." });
   });
 
