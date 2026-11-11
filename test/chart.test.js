@@ -166,3 +166,96 @@ test("invoices: written in the chart, numbered, paid by hand or by card; the car
   assert.equal(bodies.some((x) => /needling/i.test(x)), false, "no email says what the invoice was for");
   assert.equal((await s.call("GET", u + "/billing", undefined, pat.token)).status, 401);
 });
+
+test("card on file: staff send a link to the card processor's own page; the saved card becomes the default, and nothing about care leaves", async (t) => {
+  // payments off: there is no page to send, and only staff may ask
+  const offline = await start(); t.after(offline.close);
+  const lee = await signup(offline), A0 = await offline.adminToken();
+  assert.equal((await offline.call("POST", `/api/admin/emr/${lee.client.id}/card-link`, {})).status, 401);
+  assert.equal((await offline.call("POST", `/api/admin/emr/${lee.client.id}/card-link`, {}, lee.token)).status, 401);
+  const none = await offline.call("POST", `/api/admin/emr/${lee.client.id}/card-link`, { send: true }, A0);
+  assert.equal(none.status, 503); assert.match(none.body.error, /not switched on/);
+
+  const made = [], mail = [], updates = [], asked = [];
+  const stripeClient = {
+    customers: { create: async () => ({ id: "cus_9" }), update: async (customer, o) => { updates.push([customer, o]); return { id: customer }; } },
+    checkout: { sessions: { create: async (o) => { made.push(o); return { id: "cs_set_1", url: "https://pay.example.com/cs_set_1" }; } } },
+    setupIntents: { retrieve: async (si) => { asked.push(si); return { id: si, status: "succeeded", payment_method: "pm_card_1" }; } },
+    webhooks: { constructEvent: (raw) => JSON.parse(raw) }
+  };
+  const keys = { stripeClient, stripeSecretKey: "rk_test_made_up", stripeWebhookSecret: "whsec_made_up" };
+
+  // payments on, email off: the link can be opened but not sent, and no page is made for an email that can't go out
+  const quiet = await start(keys); t.after(quiet.close);
+  const kim = await signup(quiet), A1 = await quiet.adminToken();
+  const unsent = await quiet.call("POST", `/api/admin/emr/${kim.client.id}/card-link`, { send: true }, A1);
+  assert.equal(unsent.status, 400); assert.match(unsent.body.error, /open the page/i);
+  assert.equal(made.length, 0);
+
+  // a stand-in for the email service: it keeps what it is sent
+  const post = require("http").createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { const j = JSON.parse(b); mail.push(...(Array.isArray(j) ? j : [j])); } catch {} res.writeHead(200, { "content-type": "application/json" }); res.end('{"id":"m1","data":[]}'); }); }).listen(0);
+  await new Promise((r) => post.once("listening", r));
+  const s = await start({ ...keys, resendKey: "re_made_up", notifyFrom: "MD Fit <office@example.com>", resendUrl: `http://127.0.0.1:${post.address().port}`, notifyGapMs: 1 });
+  t.after(() => { s.close(); post.close(); });
+  const pat = await signup(s), A = await s.adminToken(), id = pat.client.id, u = `/api/admin/emr/${id}`;
+  await s.call("PUT", u + "/summary", { summary: "Runner with left hip pain, improving.", tags: ["Hip"] }, A);
+  assert.equal((await s.call("POST", u + "/card-link", { send: true })).status, 401);
+  assert.equal((await s.call("POST", u + "/card-link", { send: true }, pat.token)).status, 401);
+  assert.equal((await s.call("POST", "/api/admin/emr/nobody/card-link", {}, A)).status, 404);
+  assert.equal(made.length, 0);
+
+  // opened by staff, not emailed
+  const open = await s.call("POST", u + "/card-link", {}, A);
+  assert.equal(open.status, 200); assert.deepEqual(open.body, { url: "https://pay.example.com/cs_set_1", sent: false });
+  // setup mode for this person's customer: nothing to buy, nothing but ids in the metadata
+  const m = made[0];
+  assert.equal(m.mode, "setup"); assert.equal(m.customer, "cus_9"); assert.equal(m.client_reference_id, id); assert.equal(m.currency, "usd");
+  assert.equal(m.line_items, undefined); assert.equal(m.payment_intent_data, undefined); assert.equal(m.subscription_data, undefined);
+  assert.deepEqual(m.metadata, { kind: "card", clientId: id }); assert.deepEqual(m.setup_intent_data, { metadata: { kind: "card", clientId: id } });
+  assert.equal(m.success_url, "https://mdfit.example.com/account?card=saved"); assert.equal(m.cancel_url, "https://mdfit.example.com/account");
+  assert.match(m.integration_identifier, /^mdfit_card_[a-z]+$/);
+  assert.deepEqual(Object.keys(m).sort(), ["cancel_url", "client_reference_id", "currency", "customer", "integration_identifier", "metadata", "mode", "setup_intent_data", "success_url"]);
+
+  // emailed to the client
+  const link = await s.call("POST", u + "/card-link", { send: true }, A);
+  assert.equal(link.status, 200); assert.deepEqual(link.body, { url: "https://pay.example.com/cs_set_1", sent: true });
+  assert.equal(made.length, 2); assert.equal(made[1].customer, "cus_9", "the same customer, not a second one");
+  assert.equal(/hip|runner|pat@example\.com|Pat Doe/i.test(JSON.stringify(made)), false, "the checkout page is told who by id only, and nothing about care");
+
+  // the processor says the card was saved: it becomes the customer's default. Nothing was paid for, so nothing is fulfilled.
+  const session = { id: "cs_set_1", mode: "setup", status: "complete", payment_status: "no_payment_required", customer: "cus_9", client_reference_id: id, setup_intent: "seti_1", metadata: m.metadata };
+  const hook = (ev) => fetch(s.base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": "x" }, body: JSON.stringify(ev) });
+  const ev = { id: "evt_card_1", type: "checkout.session.completed", created: 1793200000, data: { object: session } };
+  assert.equal(updates.length, 0);
+  let r = await hook(ev);
+  assert.equal(r.status, 200);
+  assert.deepEqual(asked, ["seti_1"]);
+  assert.deepEqual(updates, [["cus_9", { invoice_settings: { default_payment_method: "pm_card_1" } }]]);
+  const savedAt = new Date(1793200000 * 1000).toISOString();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8")).find((x) => x.id === id).cardSavedAt, savedAt);
+  // the same event again is not an error and does nothing more
+  r = await hook(ev);
+  assert.equal(r.status, 200); assert.equal((await r.json()).duplicate, true); assert.equal(updates.length, 1);
+  // the same session under a new event id, the SetupIntent already expanded: the same default is set again, nothing else moves
+  r = await hook({ ...ev, id: "evt_card_2", data: { object: { ...session, setup_intent: { id: "seti_1", payment_method: { id: "pm_card_1" } } } } });
+  assert.equal(r.status, 200); assert.deepEqual(asked, ["seti_1"]);
+  assert.deepEqual(updates[1], updates[0]); assert.equal(updates.length, 2);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8")).find((x) => x.id === id).cardSavedAt, savedAt);
+  // the processor refusing the change is logged, not thrown: the webhook still answers 200
+  stripeClient.customers.update = async () => { throw new Error("No such customer"); };
+  assert.equal((await hook({ ...ev, id: "evt_card_3" })).status, 200);
+  // a setup session nobody here owns is ignored
+  assert.equal((await hook({ ...ev, id: "evt_card_4", data: { object: { ...session, customer: "cus_other", client_reference_id: "nobody", metadata: {} } } })).status, 200);
+  assert.equal(updates.length, 2);
+
+  await new Promise((r2) => setTimeout(r2, 700));
+  const links = mail.filter((x) => x.subject === "Add a card on file with MD Fit");
+  assert.equal(links.length, 1, "only the request with send: true was emailed");
+  assert.equal(mail.some((x) => /receipt/i.test(x.subject)), false, "saving a card sends no receipt");
+  const body = `${links[0].subject}\n${links[0].text || ""}`;
+  assert.match(body, /Hi Pat,/); assert.ok(body.includes("https://pay.example.com/cs_set_1"));
+  assert.match(body, /add a card on file for future payments/); assert.match(body, /never sees your card number/); assert.match(body, /24 hours/); assert.match(body, /941-313-0562/);
+  assert.equal(/hip|runner/i.test(body), false, "nothing about care is in the email");
+  const acts = ((await s.call("GET", "/api/admin/audit?action=emr", undefined, A)).body.entries || []).filter((e) => e.action === "emr.card_link");
+  assert.deepEqual(acts.map((e) => e.meta.sent).sort(), [false, true]);
+});
