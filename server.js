@@ -1265,6 +1265,23 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
   // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
   const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
+  // A member's own group classes. Bookings are keyed by the email the class was booked under, which is how the
+  // public /events page saves them, so a member sees the classes they booked there without booking again here.
+  cl.me.get("/classes", (req, res) => {
+    const email = String(req.client.email || "").toLowerCase();
+    const { date: today, time: nowTime } = nowParts(cfg.tz, cfg.now());
+    const byId = new Map(classes().map((c) => [c.id, c]));
+    const mine = bookings().filter((b) => String(b.email || "").toLowerCase() === email)
+      .map((b) => {
+        const c = byId.get(b.classId) || {};
+        return { id: b.id, classId: b.classId, title: b.title || c.title || "Class", date: b.date, time: b.time || c.time || "",
+          minutes: c.durationMin || null, coach: c.coach || "", location: c.location || "", cancelToken: b.cancelToken || "" };
+      })
+      .sort((a, b) => (a.date + a.time < b.date + b.time ? -1 : 1));
+    const ahead = (x) => x.date > today || (x.date === today && (!x.time || x.time >= nowTime));
+    res.json({ upcoming: mine.filter(ahead), past: mine.filter((x) => !ahead(x)).reverse() });
+  });
+
   cl.me.post("/devices", (req, res) => {
     const { token, platform } = deviceBody(req);
     if (!push.register({ token, clientId: req.client.id, platform })) return res.status(400).json({ error: "Bad device token." });

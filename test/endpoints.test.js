@@ -316,3 +316,26 @@ test("stripe: a paying member is recognised without the webhook (checkout confir
   const pm = (await s.call("GET", "/api/me/payments", undefined, third)).body.membership;
   assert.equal(pm.stripeSubscriptionId, "sub_acc"); assert.equal(pm.tier, "accountability");
 });
+
+test("a member sees the group classes they booked, matched on their email", async (t) => {
+  const s = await start(); t.after(s.close);
+  const at = await s.adminToken();
+  const cls = await s.call("POST", "/api/admin/classes", { title: "Mobility & Core", day: 2, time: "09:00", durationMin: 45, capacity: 8, coach: "Dr. Jared", location: "Clinic" }, at);
+  assert.equal(cls.status, 201);
+  const tok = (await signup(s)).body.token;
+  // the public /events page books by email, the same address the account uses
+  const sessions = (await s.call("GET", "/api/schedule")).body.sessions;
+  const next = sessions.find((x) => x.classId === cls.body.id);
+  assert.ok(next, "the class appears on the public schedule");
+  const booked = await s.call("POST", "/api/bookings", { classId: next.classId, date: next.date, name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
+  assert.equal(booked.status, 201);
+  const mine = await s.call("GET", "/api/me/classes", undefined, tok);
+  assert.equal(mine.status, 200);
+  assert.equal(mine.body.upcoming.length, 1);
+  assert.equal(mine.body.upcoming[0].title, "Mobility & Core");
+  assert.equal(mine.body.upcoming[0].minutes, 45);
+  assert.equal(mine.body.upcoming[0].date, next.date);
+  // someone else's booking never shows up
+  const other = (await signup(s, { email: "lee@example.com" })).body.token;
+  assert.equal((await s.call("GET", "/api/me/classes", undefined, other)).body.upcoming.length, 0);
+});
