@@ -69,6 +69,9 @@ function loadConfig() {
     apnsSandbox: env("APNS_ENV") === "sandbox",
     fcmServiceAccount: env("FCM_SERVICE_ACCOUNT"), // Android: Firebase service-account JSON
     simplePracticeIcs: env("SIMPLEPRACTICE_ICS_URL"),
+    // Built-in video visits (lib/telehealth.js). STUN finds a direct path between the two browsers; TURN (optional)
+    // relays the encrypted call on networks that block direct paths.
+    telehealth: { stun: env("STUN_URLS", "stun:stun.cloudflare.com:3478"), turnUrl: env("TURN_URL"), turnUser: env("TURN_USERNAME"), turnCred: env("TURN_CREDENTIAL") },
     // AI scribe (lib/scribe.js): any OpenAI-compatible chat service. Off unless an address, a key and a model are set.
     // Either the three SCRIBE_* variables, or AI_PROVIDER + AI_MODEL with that provider's own key variable.
     scribe: (() => {
@@ -1271,6 +1274,20 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
 
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
+  // ---- Built-in video visits: the waiting room and call set-up ride on the live connection (attached at start-up);
+  // these two routes hand each side the addresses its browser needs to find a path to the other.
+  const tele = require("./lib/telehealth");
+  const ice = (req, res) => res.json({ iceServers: tele.iceServers(cfg) });
+  admin.get("/telehealth/ice", ice);
+  cl.me.get("/telehealth/ice", ice);
+  app.set("telehealth", tele.createTelehealth({ audit, logger, now: () => cfg.now().getTime(),
+    // The waiting-room row: the member's name and, if they have one, their next video visit today
+    describe: (id) => {
+      const c = cl.clients().find((x) => x.id === id); if (!c) return {};
+      const { date: today } = nowParts(cfg.tz, cfg.now());
+      const v = appointments().filter((a) => a.clientId === id && a.status === "booked" && a.date === today).sort((a, b) => (a.time < b.time ? -1 : 1))[0];
+      return { name: c.name, visit: v ? `${v.typeName || "Visit"} · ${prettyTime(v.time)}` : "" };
+    } }));
   // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
   const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
   // A member's own group classes. Bookings are keyed by the email the class was booked under, which is how the
@@ -1425,6 +1442,8 @@ if (require.main === module) {
   const server = http.createServer(app);
   const rt = createRealtime(server, cfg, { findClient: app.get("findClient") });
   app.set("rt", rt);
+  rt.adminNs.on("connection", (s) => app.get("telehealth").staffJoin(s));   // video visits: waiting room and admit
+  rt.memberNs.on("connection", (s) => app.get("telehealth").patientJoin(s)); // video visits: knock and call set-up
   // Live calendar sync: check Google Calendar / SimplePractice every minute (CAL_WATCH_SECONDS, 0 = off)
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
