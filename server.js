@@ -1103,25 +1103,43 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     calsync.clear(); calWatch.sig.clear(); watchCalendar();
     res.json({ ok: true, simplepractice: u ? "configured" : "off" });
   });
-  // Busy blocks from Google Calendar / SimplePractice for the Admin calendar, as clinic-time minutes per day.
-  // Times only (no titles or names). MD Fit's own visits, which are copied to Google, are left out so they don't show twice.
+  // What is on Dr. Jared's other calendars (Google Calendar / SimplePractice) for the practice calendar, as clinic-time
+  // minutes per day. Google events come with their titles, shown only on this signed-in staff screen and never stored;
+  // anything whose title can't be read (SimplePractice, a calendar that wouldn't answer) stays a plain "busy" block.
+  // MD Fit's own visits, which are copied to Google, are left out so they don't show twice.
   admin.get("/busy", async (req, res) => {
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || "")) ? String(req.query.from) : nowParts(cfg.tz, cfg.now()).date;
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 42);
-    let busy = [];
+    let busy = [], events = null;
     try { busy = await calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() }); } catch { busy = []; }
+    try { if (calsync.events && calsync.googleOn()) events = await calsync.events(from, addDays(from, days - 1)); } catch (e) { events = null; logger.error("gcal_events_failed", { error: e.message }); }
     const appts = appointments().filter((a) => a.status !== "cancelled");
+    // the parts of [s, e] not covered by any of the cuts
+    const minus = (s, e, cuts) => { let left = [[s, e]]; for (const [cs, ce] of cuts) left = left.flatMap(([a, b]) => (ce <= a || cs >= b ? [[a, b]] : [[a, Math.min(b, cs)], [Math.max(a, ce), b]].filter(([x, y]) => y > x))); return left; };
     const out = [];
     for (let i = 0; i < days; i++) {
       const date = addDays(from, i);
       const own = appts.filter((a) => a.date === date).map((a) => [toMin(a.time), toMin(a.time) + (a.minutes || 60)]);
+      const named = [];
+      for (const ev of events || []) {
+        const [r] = busyOn(date, [ev]); if (!r) continue;
+        const allDay = !!ev.allDay || (r[0] === 0 && r[1] === 24 * 60);
+        if (!allDay && own.some(([s0, e0]) => s0 === r[0] && e0 === r[1])) continue;
+        named.push({ date, start: r[0], end: r[1], allDay, source: "google", title: ev.title });
+      }
+      out.push(...named);
+      const cuts = own.concat(named.filter((n) => !n.allDay).map((n) => [n.start, n.end]));
       for (const b of busy) {
         const [r] = busyOn(date, [b]); if (!r) continue;
-        if (String(b.source).startsWith("google") && own.some(([s0, e0]) => s0 === r[0] && e0 === r[1])) continue;
-        out.push({ date, start: r[0], end: r[1], allDay: !!b.allDay || (r[0] === 0 && r[1] === 24 * 60), source: String(b.source).startsWith("google") ? "google" : "simplepractice" });
+        const google = String(b.source).startsWith("google"), allDay = !!b.allDay || (r[0] === 0 && r[1] === 24 * 60);
+        if (!google) { out.push({ date, start: r[0], end: r[1], allDay, source: "simplepractice" }); continue; }
+        if (allDay) { if (!named.some((n) => n.allDay)) out.push({ date, start: r[0], end: r[1], allDay, source: "google" }); continue; }
+        if (!events) { if (!own.some(([s0, e0]) => s0 === r[0] && e0 === r[1])) out.push({ date, start: r[0], end: r[1], allDay, source: "google" }); continue; }
+        // a busy time no titled event accounts for (five minutes or more) is still shown, as plain "busy"
+        for (const [s0, e0] of minus(r[0], r[1], cuts)) if (e0 - s0 >= 5) out.push({ date, start: s0, end: e0, allDay: false, source: "google" });
       }
     }
-    res.json({ busy: out, ...calsync.status() });
+    res.json({ busy: out, titles: !!events, ...calsync.status() });
   });
 
   admin.post("/calsync/test", async (req, res) => {
