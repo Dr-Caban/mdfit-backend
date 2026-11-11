@@ -153,6 +153,40 @@ test("scribe: a momentary 'too many requests' is tried once more; a refusal says
   assert.match(r.body.error, /did not accept the key/); assert.doesNotMatch(r.body.error, /sk-live|0123456789/);
 });
 
+test("scribe: the model is chosen from what the key is offered, and the choice is kept", async (t) => {
+  // a stand-in service that knows two models and refuses any other name the way the real ones do
+  const asked = [];
+  const srv = http.createServer((req, res) => {
+    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => {
+      asked.push(req.url); res.setHeader("content-type", "application/json");
+      if (req.url.endsWith("/models")) return res.end(JSON.stringify({ data: [{ id: "kimi-new" }, { id: "kimi-old" }, { id: "bad id <script>" }] }));
+      const model = JSON.parse(b).model;
+      if (!["kimi-new", "kimi-old"].includes(model)) { res.statusCode = 404; return res.end(JSON.stringify({ error: { type: "resource_not_found_error", message: `Not found the model ${model} or Permission denied` } })); }
+      res.end(JSON.stringify({ choices: [{ message: { content: "Drafted by " + model } }] }));
+    });
+  }).listen(0);
+  await new Promise((r) => srv.once("listening", r)); t.after(() => srv.close());
+  const cfg = { scribe: { url: `http://127.0.0.1:${srv.address().port}/v1`, key: "test-key-not-real", model: "kimi-gone" } };
+  const s = await start(cfg); t.after(s.close);
+  const A = await s.adminToken();
+  let r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, A);
+  assert.equal(r.status, 502); assert.match(r.body.error, /does not offer the model "kimi-gone"/); assert.match(r.body.error, /Change model/);
+  r = await s.call("GET", "/api/admin/scribe/models", undefined, A);
+  assert.deepEqual(r.body.models, ["kimi-new", "kimi-old"], "only well-formed names are passed on"); assert.equal(r.body.current, "kimi-gone");
+  assert.equal(JSON.stringify(r.body).includes("test-key-not-real"), false);
+  assert.equal((await s.call("PUT", "/api/admin/scribe/model", { model: "made-up" }, A)).status, 400);
+  assert.equal((await s.call("PUT", "/api/admin/scribe/model", { model: "kimi-new" })).status, 401);
+  r = await s.call("PUT", "/api/admin/scribe/model", { model: "kimi-new" }, A);
+  assert.equal(r.status, 200); assert.equal(r.body.model, "kimi-new");
+  r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, A);
+  assert.equal(r.status, 200); assert.equal(r.body.draft, "Drafted by kimi-new");
+  const acts = ((await s.call("GET", "/api/admin/audit?action=scribe", undefined, A)).body.entries || []).map((e) => e.action);
+  assert.ok(acts.includes("scribe.model"));
+  // the choice outlives a restart: a second server on the same data uses it
+  const s2 = await start({ ...cfg, dataDir: s.dataDir }); t.after(s2.close);
+  assert.equal((await s2.call("GET", "/api/admin/scribe", undefined, await s2.adminToken())).body.model, "kimi-new");
+});
+
 test("scribe: only https services (or a model on this machine) can be connected; names are swapped whole", () => {
   assert.equal(settingsFrom({ scribe: { url: "http://api.example.com/v1", key: "k", model: "m" } }).enabled, false, "plain http to another host is refused");
   assert.equal(settingsFrom({ scribe: { url: "https://api.example.com/v1", key: "k", model: "m" } }).enabled, true);
