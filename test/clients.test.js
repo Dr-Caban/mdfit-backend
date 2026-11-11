@@ -738,7 +738,7 @@ test("client type, assigned and saved programs, booking link and video consultat
   assert.deepEqual((await s.call("DELETE", `/api/me/pinned/${progs[3]}`, undefined, tok)).body.pinnedPrograms, [progs[2]]);
 
   assert.equal((await s.call("POST", `/api/admin/clients/${cid}/send-booking-link`, { typeId: "nope" }, admin)).status, 400);
-  assert.equal((await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:00" }, admin)).status, 400, "needs a video link");
+  assert.equal((await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:00", meetingLink: "not a link" }, admin)).status, 400, "a link that is typed must be a real one");
   const c1 = await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:00", minutes: 30, meetingLink: "https://zoom.us/j/1" }, admin);
   assert.equal(c1.status, 201); assert.equal(c1.body.payment, "exempt", "inpatients never pay"); assert.equal(c1.body.meetingLink, "https://zoom.us/j/1");
   assert.equal((await s.call("POST", `/api/admin/clients/${cid}/consult`, { date: "2026-11-05", time: "10:15", meetingLink: "https://zoom.us/j/1" }, admin)).status, 409, "no double booking");

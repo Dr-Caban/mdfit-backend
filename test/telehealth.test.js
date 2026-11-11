@@ -70,9 +70,15 @@ test("one to one keeps a second person waiting; leaving and dropping clean up", 
   doc.fire("tele_admit", { clientId: "lee2" });
   assert.match(doc.last("tele_error").data.error, /End the current visit/);
   assert.equal(other.last("tele_admitted"), undefined);
-  // a private visit cannot be turned into a live room while the patient is in it
+  // opening a private visit to more people: the person in it becomes a viewer first and is told why, then others can come in
   doc.fire("tele_group", { on: true });
-  assert.match(doc.last("tele_error").data.error, /before opening the live room/); assert.equal(doc.last("tele_waiting").data.group, false);
+  assert.deepEqual(pat.last("tele_role").data, { role: "viewer", opened: true });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.role]), [["pat1", "viewer"]]); assert.equal(doc.last("tele_waiting").data.group, true);
+  doc.fire("tele_group", { on: false });
+  assert.match(doc.last("tele_error").data.error, /End the live room/);
+  doc.fire("tele_admit", { clientId: "lee2" });
+  assert.deepEqual(other.last("tele_admitted").data, { role: "viewer", group: true });
+  other.fire("tele_leave"); other.fire("tele_knock");
 
   pat.fire("disconnect");
   assert.equal(doc.last("tele_ended").data.why, "patient_left");
@@ -235,4 +241,45 @@ test("inviting: the member is told, shows as pending, and is let in on arrival; 
   clock += 3 * 60 * 60 * 1000;
   assert.equal(tele.isInvited("lee2"), false); b.fire("tele_knock"); assert.equal(b.count("tele_admitted"), 1, "an old invitation has lapsed");
   assert.ok(audit.rows.some((e) => e.action === "telehealth.invite" && e.subject === "pat1" && e.meta.emailed === true));
+});
+
+test("a visit survives a server restart: it is put back only when the host and the member both say it is still on", () => {
+  // a fresh server (nothing in the room), as after a restart; everyone reconnects
+  let clock = 1000;
+  const audit = { rows: [], record(e) { this.rows.push(e); } };
+  const tele = createTelehealth({ audit, now: () => clock, describe: (id) => ({ name: id === "pat1" ? "Pat Doe" : "Lee Other" }) });
+  const doc = conn(), a = conn("pat1"), b = conn("lee2");
+  tele.staffJoin(doc); tele.patientJoin(a); tele.patientJoin(b);
+
+  // a member's word alone restores nothing, and gives them no way to reach staff
+  b.fire("tele_here");
+  assert.deepEqual(doc.last("tele_waiting").data.room, []);
+  b.fire("tele_signal", { candidate: "x" }); assert.equal(doc.count("tele_signal"), 0);
+
+  // the host names who it is with; the one who also says so is back in the room, the other is not
+  a.fire("tele_here");
+  doc.fire("tele_resume", { group: false, people: [{ clientId: "pat1", role: "speaker" }] });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.name, m.role]), [["pat1", "Pat Doe", "speaker"]]);
+  assert.deepEqual(a.last("tele_resumed").data, { role: "speaker", group: false }); assert.equal(b.last("tele_resumed"), undefined);
+  // and the visit works again: set-up messages pass, a second person still has to wait, and End ends it
+  doc.fire("tele_signal", { to: "pat1", sdp: { type: "offer" } }); assert.equal(a.count("tele_signal"), 1);
+  a.fire("tele_signal", { candidate: "c" }); assert.equal(doc.last("tele_signal").data.from, "pat1");
+  b.fire("tele_knock"); doc.fire("tele_admit", { clientId: "lee2" });
+  assert.match(doc.last("tele_error").data.error, /End the current visit/);
+  doc.fire("tele_end"); assert.equal(a.last("tele_ended").data.why, "ended");
+  assert.ok(audit.rows.some((e) => e.action === "telehealth.resume" && e.subject === "pat1"));
+
+  // the order does not matter, a live room comes back with its roles, and a stale claim lapses
+  const tele2 = createTelehealth({ now: () => clock, describe: () => ({ name: "Someone" }) });
+  const doc2 = conn(), c = conn("kim3"), d = conn("pat1"), e = conn("old9");
+  tele2.staffJoin(doc2); [c, d, e].forEach((x) => tele2.patientJoin(x));
+  e.fire("tele_here"); clock += 120000;
+  doc2.fire("tele_resume", { group: true, people: [{ clientId: "kim3", role: "speaker" }, { clientId: "pat1", role: "viewer" }, { clientId: "old9", role: "viewer" }] });
+  c.fire("tele_here"); d.fire("tele_here");
+  const snap = doc2.last("tele_waiting").data;
+  assert.equal(snap.group, true); assert.deepEqual(snap.room.map((m) => [m.clientId, m.role]).sort(), [["kim3", "speaker"], ["pat1", "viewer"]]);
+  // another staff screen cannot take a running visit this way
+  const other = conn(), f = conn("new7"); tele2.staffJoin(other); tele2.patientJoin(f);
+  other.fire("tele_resume", { group: true, people: [{ clientId: "new7", role: "speaker" }] }); f.fire("tele_here");
+  assert.equal(doc2.last("tele_waiting").data.room.length, 2); assert.equal(f.last("tele_resumed"), undefined);
 });
