@@ -140,3 +140,24 @@ test("record: a paid video visit (Stripe service) waits in the record and is use
   const after = (await s.call("GET", "/api/me/chart", undefined, pat.token)).body;
   assert.equal(after.paidVisits.length, 0); assert.equal(after.visits.length, 1); assert.ok(after.visits[0].meetingLink);
 });
+
+test("record: a chart that cannot be opened is never saved over", async (t) => {
+  const s = await start(); t.after(s.close);
+  const adm = await s.adminToken();
+  const pat = (await s.call("POST", "/api/clients/signup", { name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", password: "pat-pass-123" })).body;
+  await s.call("PUT", `/api/admin/emr/${pat.client.id}/patient`, { active: true }, adm);
+  assert.equal((await s.call("POST", `/api/admin/emr/${pat.client.id}/notes`, { text: "First note" }, adm)).status, 201);
+  // the stored chart is replaced by one sealed with a key this server does not have (as after a key change)
+  const { cipher } = require("../lib/messages");
+  const f = path.join(s.dataDir, "clients.json"), list = JSON.parse(fs.readFileSync(f, "utf8"));
+  const foreign = cipher(["some-other-key-entirely"]).enc(JSON.stringify({ notes: [{ id: "n1", text: "Years of history", at: "2025-01-01T00:00:00.000Z" }], movements: [], events: [] }));
+  list.find((c) => c.id === pat.client.id).chart = foreign;
+  fs.writeFileSync(f, JSON.stringify(list));
+  // it reads as empty rather than breaking the lists...
+  assert.equal((await s.call("GET", "/api/admin/emr", undefined, adm)).status, 200);
+  assert.deepEqual((await s.call("GET", `/api/admin/emr/${pat.client.id}`, undefined, adm)).body.notes, []);
+  // ...but nothing may be written over it
+  const w = await s.call("POST", `/api/admin/emr/${pat.client.id}/notes`, { text: "A new note" }, adm);
+  assert.equal(w.status, 400); assert.match(w.body.error, /nothing was saved/);
+  assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).find((c) => c.id === pat.client.id).chart, foreign, "the stored chart is untouched");
+});

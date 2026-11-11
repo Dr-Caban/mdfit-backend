@@ -187,6 +187,7 @@ test("cancelling a Cal.com visit doesn't erase a booking made while Cal answers"
   const s = await start({ calKey: "cal_key", calUrl: `http://127.0.0.1:${cal.address().port}/v2`, seed: { appointments: [calAppt("aaaaaaaaaaaa", "09:00"), calAppt("bbbbbbbbbbbb", "13:00")] } }); t.after(s.close);
   const A = await s.adminToken();
   const { token: T } = (await signup(s)).body;
+  { const l = s.readJson("clients"); l[0].emailVerifiedAt = new Date().toISOString(); s.writeJson("clients", l); } // the address is proven, so visits booked by email are the member's
   const book = (time) => s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-04", time, name: "Lee Roe", email: "lee@example.com", phone: "941-555-0100" });
 
   for (const [cancel, time] of [[() => s.call("PATCH", "/api/admin/appointments/aaaaaaaaaaaa", { status: "cancelled" }, A), "09:00"],
@@ -329,6 +330,9 @@ test("a member sees the group classes they booked, matched on their email", asyn
   assert.ok(next, "the class appears on the public schedule");
   const booked = await s.call("POST", "/api/bookings", { classId: next.classId, date: next.date, name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" });
   assert.equal(booked.status, 201);
+  // an account that has only typed the email sees nothing; once the address is proven the booking is theirs
+  assert.equal((await s.call("GET", "/api/me/classes", undefined, tok)).body.upcoming.length, 0);
+  { const l = s.readJson("clients"); l.find((c) => c.email === "pat@example.com").emailVerifiedAt = new Date().toISOString(); s.writeJson("clients", l); }
   const mine = await s.call("GET", "/api/me/classes", undefined, tok);
   assert.equal(mine.status, 200);
   assert.equal(mine.body.upcoming.length, 1);
