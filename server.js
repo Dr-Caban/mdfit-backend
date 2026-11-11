@@ -1298,7 +1298,23 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   const ice = (req, res) => res.json({ iceServers: tele.iceServers(cfg) });
   admin.get("/telehealth/ice", ice);
   cl.me.get("/telehealth/ice", ice);
+  // Whether Dr. Jared has asked this member to join a video session right now (the app shows a Join banner)
+  cl.me.get("/telehealth/invite", (req, res) => res.json({ invited: app.get("telehealth").isInvited(req.client.id) }));
   app.set("telehealth", tele.createTelehealth({ audit, logger, now: () => cfg.now().getTime(),
+    // An invitation: a notice in the app, a push to their phone and an email. Each says only that there is a video
+    // session to join and where; nothing about the member's care.
+    invite: (id) => {
+      const c = cl.clients().find((x) => x.id === id); if (!c) return null;
+      let pushed = false, emailed = false;
+      const rt = app.get("rt"); if (rt) rt.emitToClient(c.id, "tele_invited", { at: new Date().toISOString() });
+      try { push.toClient(c.id, { title: "Dr. Jared invited you to a video session", body: "Open MD Fit and tap Join.", route: "home" }); pushed = true; } catch {}
+      if (notify.enabled && cfg.siteUrl) {
+        notify.client(c.email, "Dr. Jared invited you to a video session", `Hi ${String(c.name || "").split(" ")[0] || "there"},\n\nDr. Jared invited you to a video session on MD Fit. Join here:\n${cfg.siteUrl}/visit\n\nSign in with your MD Fit account. There is nothing to install: it opens in your browser.\n\nMD Fit`);
+        emailed = true;
+      }
+      activity("telehealth_invite", { email: c.email });
+      return { name: c.name, emailed, pushed };
+    },
     // The waiting-room row: the member's name and, if they have one, their next video visit today
     describe: (id) => {
       const c = cl.clients().find((x) => x.id === id); if (!c) return {};

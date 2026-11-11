@@ -23,7 +23,7 @@ test("one to one: knock, admit as speaker, set-up messages both ways, end; the l
   const { tele, ledger, tick } = setup();
   const doc = conn(), pat = conn("pat1", "Pat Doe");
   tele.staffJoin(doc); tele.patientJoin(pat);
-  assert.deepEqual(doc.last("tele_waiting").data, { waiting: [], inCall: null, group: false, room: [] });
+  assert.deepEqual(doc.last("tele_waiting").data, { waiting: [], inCall: null, group: false, room: [], invited: [] });
 
   pat.fire("tele_knock");
   assert.deepEqual(pat.last("tele_waiting_room").data, { staffOnline: true });
@@ -179,4 +179,60 @@ test("path-finding addresses: a default, an optional relay, and nothing malforme
   const withRelay = iceServers({ telehealth: { stun: "stun:a.example:3478, https://not-stun", turnUrl: "turns:relay.example:5349", turnUser: "u", turnCred: "c" } });
   assert.deepEqual(withRelay, [{ urls: ["stun:a.example:3478"] }, { urls: ["turns:relay.example:5349"], username: "u", credential: "c" }]);
   assert.equal(iceServers({ telehealth: { turnUrl: "turn:relay.example", turnUser: "", turnCred: "" } }).length, 1, "a relay without credentials is left out");
+});
+
+test("inviting: the member is told, shows as pending, and is let in on arrival; a busy private visit still makes them wait", async () => {
+  const told = [];
+  const audit = { rows: [], record(e) { this.rows.push(e); } };
+  let clock = 1000;
+  const tele = createTelehealth({ audit, now: () => clock, describe: (id) => ({ name: id === "pat1" ? "Pat Doe" : "Lee Other" }),
+    invite: async (id) => { if (id === "ghost") return null; told.push(id); return { name: id === "pat1" ? "Pat Doe" : "Lee Other", emailed: true, pushed: true }; } });
+  const tick = () => new Promise((r) => setImmediate(r));
+  const doc = conn(), a = conn("pat1"), b = conn("lee2");
+  tele.staffJoin(doc); tele.patientJoin(a); tele.patientJoin(b);
+
+  doc.fire("tele_invite", { clientId: "ghost" }); await tick();
+  assert.match(doc.last("tele_error").data.error, /could not be invited/);
+  doc.fire("tele_invite", { clientId: "pat1" }); await tick();
+  assert.deepEqual(told, ["pat1"]); assert.equal(doc.last("tele_invited").data.emailed, true);
+  assert.deepEqual(doc.last("tele_waiting").data.invited.map((x) => [x.clientId, x.name]), [["pat1", "Pat Doe"]], "pending");
+  assert.equal(tele.isInvited("pat1"), true); assert.equal(tele.isInvited("lee2"), false);
+  doc.fire("tele_invite", { clientId: "pat1" }); await tick();
+  assert.match(doc.last("tele_error").data.error, /a moment ago/); assert.equal(told.length, 1, "not told twice in a minute");
+
+  // arriving lets them straight in; nobody else gets in that way
+  a.fire("tele_knock");
+  assert.deepEqual(a.last("tele_admitted").data, { role: "speaker", group: false });
+  assert.equal(doc.last("tele_started").data.clientId, "pat1"); assert.deepEqual(doc.last("tele_waiting").data.invited, []);
+  b.fire("tele_knock");
+  assert.equal(b.last("tele_admitted"), undefined, "someone not invited waits to be admitted");
+
+  // invited while a private visit is on: they wait, and can be admitted once it ends
+  clock += 120000; doc.fire("tele_invite", { clientId: "lee2" }); await tick();
+  assert.equal(b.last("tele_admitted"), undefined); assert.deepEqual(doc.last("tele_waiting").data.waiting.map((w) => w.clientId), ["lee2"]);
+  doc.fire("tele_end");
+  doc.fire("tele_admit", { clientId: "lee2" });
+  assert.deepEqual(b.last("tele_admitted").data, { role: "speaker", group: false });
+  doc.fire("tele_end");
+
+  // live room: an invited person comes in as a viewer, and can be made a speaker
+  doc.fire("tele_group", { on: true });
+  const c = conn("kim3"); tele.patientJoin(c);
+  clock += 120000; doc.fire("tele_invite", { clientId: "kim3" }); doc.fire("tele_invite", { clientId: "pat1" }); await tick();
+  c.fire("tele_knock"); a.fire("tele_knock");
+  assert.deepEqual(c.last("tele_admitted").data, { role: "viewer", group: true }); assert.deepEqual(a.last("tele_admitted").data, { role: "viewer", group: true });
+  doc.fire("tele_role", { clientId: "kim3", role: "speaker" });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.role]), [["kim3", "speaker"], ["pat1", "viewer"]]);
+  // removing someone cancels their invitation; a withdrawn or expired invitation no longer lets anyone in
+  doc.fire("tele_end", { clientId: "pat1" });
+  a.fire("tele_knock"); assert.equal(a.last("tele_declined").data.removed, true);
+  doc.fire("tele_end");
+  clock += 120000; doc.fire("tele_invite", { clientId: "lee2" }); await tick();
+  doc.fire("tele_uninvite", { clientId: "lee2" });
+  b.fire("tele_knock"); assert.equal(b.count("tele_admitted"), 1, "invitation withdrawn: back to knocking");
+  b.fire("tele_leave");
+  clock += 120000; doc.fire("tele_invite", { clientId: "lee2" }); await tick();
+  clock += 3 * 60 * 60 * 1000;
+  assert.equal(tele.isInvited("lee2"), false); b.fire("tele_knock"); assert.equal(b.count("tele_admitted"), 1, "an old invitation has lapsed");
+  assert.ok(audit.rows.some((e) => e.action === "telehealth.invite" && e.subject === "pat1" && e.meta.emailed === true));
 });
