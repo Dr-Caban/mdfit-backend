@@ -52,7 +52,9 @@ test("scribe is off until a model is connected", async (t) => {
   const s = await start(); t.after(s.close);
   const A = await s.adminToken();
   assert.equal((await s.call("GET", "/api/admin/scribe")).status, 401, "staff only");
-  assert.deepEqual((await s.call("GET", "/api/admin/scribe", undefined, A)).body, { enabled: false, model: "", host: "" });
+  const off = (await s.call("GET", "/api/admin/scribe", undefined, A)).body;
+  assert.deepEqual([off.enabled, off.model, off.host], [false, "", ""]);
+  assert.ok(off.kinds.includes("soap") && off.kinds.includes("treatment-plan"));
   const r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, A);
   assert.equal(r.status, 503); assert.match(r.body.error, /not connected/);
 });
@@ -81,6 +83,14 @@ test("scribe drafts a note; the patient's name, email and phone never leave the 
   assert.match(sent.body.messages[1].content, /the patient came in for the right knee/);
   assert.match(sent.body.messages[1].content, /the patient's swelling is down/);
   assert.match(sent.body.messages[0].content, /Use only what is in the text/);
+
+  // a clinical template uses the clinician-facing instructions; an unknown kind is refused before anything is sent
+  const soap = await s.call("POST", "/api/admin/scribe/draft", { clientId: pat.client.id, text: VISIT, kind: "soap" }, A);
+  assert.equal(soap.status, 200); assert.equal(soap.body.kind, "soap");
+  assert.match(model.seen[1].body.messages[0].content, /Subjective, Objective, Assessment, Plan/);
+  assert.match(model.seen[1].body.messages[0].content, /Not recorded/);
+  assert.equal((await s.call("POST", "/api/admin/scribe/draft", { text: VISIT, kind: "poem" }, A)).status, 400);
+  assert.equal(model.seen.length, 2);
 
   // nothing about the visit is kept: not in the chart, not in any stored file, and the ledger holds no text
   assert.deepEqual((await s.call("GET", `/api/admin/emr/${pat.client.id}`, undefined, A)).body.notes, []);

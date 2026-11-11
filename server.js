@@ -1416,6 +1416,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     notify.owner(`Video visit booked: ${appt.name}`, `${appt.name} (${appt.email}) booked ${appt.typeName} on ${when} and paid online.`);
   }
 
+  require("./lib/notes").mountNotes({ admin, store, cfg, audit, clients: cl.clients });
   require("./lib/scribe").mountScribe({ admin, cfg, audit, limiter, logger, clients: cl.clients });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, ...cl });
 
