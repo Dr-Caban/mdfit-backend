@@ -456,9 +456,61 @@ test("bunny client: an upload that hangs is given up on, it does not wait foreve
   t.after(() => clearInterval(keep));
 
   const started = Date.now();
-  await assert.rejects(() => b.uploadBytes("guid-1", tmp), /abort|timeout|TimeoutError/i, "a hung upload must reject");
+  await assert.rejects(() => b.uploadBytes("guid-1", tmp), /gave up|stalled|abort/i, "a hung upload must reject");
   const waited = Date.now() - started;
   assert.ok(waited < 5000, `gave up after ${waited}ms`);
   // the same deadline covers the JSON calls, so a hung create cannot wedge the run either
   await assert.rejects(() => b.createVideo("x"), /abort|timeout|TimeoutError/i);
+});
+
+// Drive does not go slow, it goes silent: part way through a bulk mirror it stops sending with the socket still open.
+// So the guard that matters is "no bytes for a while", not "too long in total" - a 430 MB file that keeps trickling
+// must be left alone while a quiet one is dropped in seconds.
+test("idle watchdog: a stream that goes quiet is dropped, one that keeps moving is not", async (t) => {
+  // the watchdog's timers are unref'd on purpose (it must never hold the process open), so in a test with nothing
+  // else pending the loop would empty and cancel this
+  const keep = setInterval(() => {}, 25); t.after(() => clearInterval(keep));
+  const { idleAbort, meter } = require("../lib/idle");
+  const { Readable } = require("stream");
+
+  // keeps trickling, slower than the idle window but never silent: must survive
+  const w1 = idleAbort(120, 5000);
+  const slow = Readable.from((async function* () {
+    for (let i = 0; i < 8; i++) { await new Promise((r) => setTimeout(r, 60)); yield Buffer.alloc(16, i); }
+  })());
+  let got = 0;
+  for await (const c of meter(slow, w1)) got += c.length;
+  w1.stop();
+  assert.equal(got, 128, "a slow but live transfer is not interrupted");
+  assert.equal(w1.signal.aborted, false);
+
+  // sends a little, then goes silent: must abort on the idle window, well before the ceiling
+  const w2 = idleAbort(120, 60000);
+  const stalls = Readable.from((async function* () { yield Buffer.alloc(16, 1); await new Promise(() => {}); })());
+  const t0 = Date.now();
+  await new Promise((res) => { w2.signal.addEventListener("abort", res); meter(stalls, w2).resume(); });
+  const waited = Date.now() - t0;
+  w2.stop();
+  assert.ok(w2.signal.aborted, "a silent socket is given up on");
+  assert.ok(waited < 2000, `aborted after ${waited}ms, not on the 60s ceiling`);
+  assert.match(String(w2.signal.reason && w2.signal.reason.message || ""), /stalled: no data/);
+});
+
+// The meter must not change how the stream behaves: a "data" listener would switch the source into flowing mode and
+// race whatever reads it next, silently losing bytes from an upload.
+test("idle watchdog: metering does not drop bytes or break backpressure", async (t) => {
+  // the watchdog's timers are unref'd on purpose (it must never hold the process open), so in a test with nothing
+  // else pending the loop would empty and cancel this
+  const keep = setInterval(() => {}, 25); t.after(() => clearInterval(keep));
+  const { idleAbort, meter } = require("../lib/idle");
+  const { Readable } = require("stream");
+  const w = idleAbort(5000, 20000);
+  const chunks = Array.from({ length: 50 }, (_, i) => Buffer.alloc(1024, i % 256));
+  const want = Buffer.concat(chunks);
+  const out = [];
+  // consume slowly, so the source must wait rather than run ahead
+  for await (const c of meter(Readable.from(chunks), w)) { await new Promise((r) => setImmediate(r)); out.push(c); }
+  w.stop();
+  assert.equal(Buffer.concat(out).length, want.length, "every byte arrived");
+  assert.ok(Buffer.concat(out).equals(want), "and in order, unchanged");
 });
