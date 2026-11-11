@@ -153,7 +153,7 @@ test("media sync: with no Bunny credentials every asset still goes to Cloudinary
   assert.equal(f.seen.cloudinary.length, 3); assert.equal(f.seen.bunnyCreate.length, 0);
   const pub = (await call("GET", "/api/videos")).body;
   assert.equal(pub.cloud, "testcloud");
-  assert.deepEqual(pub.bunny, { host: "", map: {} });
+  assert.equal(pub.bunny.host, ""); assert.deepEqual(pub.bunny.map, {}); // paths/res are always present, see the publishing test
   assert.deepEqual(pub.map["clip-one"], ["mdfit/videos/exercise-library/Exercise/Hips/Strength/clip-one", "v", 7]);
   assert.deepEqual(pub.ids.sort(), ["clip-one", "clip-two", "pain-pic"]);
 });
@@ -246,7 +246,7 @@ test("media sync: while Bunny is encoding the member is served from Cloudinary",
   assert.deepEqual(first.st.failed, {}); // encoding isn't a failure
   // no guid goes out yet, so the app plays the Cloudinary MP4 - never the Drive iframe
   const pub1 = (await call("GET", "/api/videos")).body;
-  assert.deepEqual(pub1.bunny, { host: "vz-test.b-cdn.net", map: {} });
+  assert.equal(pub1.bunny.host, "vz-test.b-cdn.net"); assert.deepEqual(pub1.bunny.map, {});
   assert.deepEqual(Object.keys(pub1.map).sort(), ["clip-one", "clip-two", "pain-pic"]);
   // once the encode finishes, the next pass publishes both without re-uploading anything
   f.state.encode = { status: 4, encodeProgress: 100, availableResolutions: "360p,720p" };
@@ -400,4 +400,40 @@ test("media sync: a collection outage still gets the videos uploaded", async (t)
   assert.equal(f.seen.bunnyUpload.length, 2);
   for (const c of f.seen.bunnyCreate) assert.equal(c.collectionId, undefined, "unfiled rather than not uploaded");
   assert.deepEqual(Object.keys((await call("GET", "/api/videos")).body.bunny.map).sort(), ["clip-one", "clip-two"]);
+});
+
+// One upload has to serve web, Android and Apple. The backend therefore publishes the URL shape as templates and the
+// renditions Bunny actually produced, so a native client neither hard-codes the host nor assumes 720p exists.
+test("api: /api/videos publishes the playback shape every platform needs", async (t) => {
+  withBunny(true); t.after(() => withBunny(false));
+  const f = await fakes(); t.after(f.close);
+  const { call } = await start(t, f);
+  const adm = await login(call);
+  await sync(call, adm);
+
+  const pub = (await call("GET", "/api/videos")).body;
+  assert.equal(pub.bunny.host, "vz-test.b-cdn.net");
+  // the templates, not baked-in URLs: moving the pull zone must not need three app releases
+  assert.deepEqual(pub.bunny.paths, { hls: "https://{host}/{guid}/playlist.m3u8",
+    mp4: "https://{host}/{guid}/play_{res}.mp4", thumb: "https://{host}/{guid}/thumbnail.jpg", preferred: "720p" });
+  // what Bunny really made, per key - a client picks a rendition instead of assuming one
+  assert.deepEqual(pub.bunny.res["clip-one"], ["360p", "720p"]);
+
+  // filling a template gives the same URLs lib/bunny.js builds, which is the contract that keeps them in step
+  const guid = pub.bunny.map["clip-one"];
+  const fill = (t2, res) => t2.replace("{host}", pub.bunny.host).replace("{guid}", guid).replace("{res}", res);
+  const direct = createBunny({ apiKey: "k", libraryId: "l", host: pub.bunny.host }).urls(guid);
+  assert.equal(fill(pub.bunny.paths.hls), direct.hls);
+  assert.equal(fill(pub.bunny.paths.mp4, pub.bunny.paths.preferred), direct.mp4720);
+  assert.equal(fill(pub.bunny.paths.thumb), direct.thumb);
+});
+
+test("api: with no Bunny configured the playback shape is still well formed", async (t) => {
+  const f = await fakes(); t.after(f.close); // no Bunny credentials
+  const { call } = await start(t, f);
+  const pub = (await call("GET", "/api/videos")).body;
+  assert.equal(pub.bunny.host, "", "nothing to play from");
+  assert.deepEqual(pub.bunny.map, {});
+  assert.deepEqual(pub.bunny.res, {}, "a client iterating res must not get undefined");
+  assert.equal(typeof pub.bunny.paths, "object");
 });
