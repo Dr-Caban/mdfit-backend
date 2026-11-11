@@ -35,6 +35,14 @@ async function start(extra = {}) {
 
 const signup = (s, over = {}) => s.call("POST", "/api/clients/signup", { name: "Pat Doe", email: "Pat@Example.com", phone: "941-555-0100", password: "pat-pass-123", ...over });
 
+// Marks an account's email as proven, the way an emailed code or Google/Apple sign-in does. Visits booked as a guest
+// are matched to an account by email only after that.
+const prove = (s, email = "pat@example.com") => {
+  const f = path.join(s.dataDir, "clients.json"), list = JSON.parse(fs.readFileSync(f, "utf8"));
+  list.find((c) => c.email === email).emailVerifiedAt = new Date().toISOString();
+  fs.writeFileSync(f, JSON.stringify(list));
+};
+
 test("sign up, duplicate email, log in, wrong password, profile", async (t) => {
   const s = await start(); t.after(s.close);
   assert.equal((await signup(s, { password: "short" })).status, 400);
@@ -74,6 +82,12 @@ test("dashboard shows only my appointments; I can cancel mine, not others'", asy
   const book = (email, time) => s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time, name: "X Y", email, phone: "941-555-0100" });
   const mine = (await book("pat@example.com", "09:00")).body.appointment;
   const other = (await book("someone@example.com", "11:00")).body.appointment;
+
+  // booked as a guest with my email: not mine to see or cancel until I have proved the address is mine
+  const before = (await s.call("GET", "/api/me/appointments", undefined, tok)).body;
+  assert.deepEqual([before.upcoming.length, before.past.length], [0, 0]);
+  assert.equal((await s.call("POST", `/api/me/appointments/${mine.id}/cancel`, {}, tok)).status, 404);
+  prove(s);
 
   const list = (await s.call("GET", "/api/me/appointments", undefined, tok)).body;
   assert.deepEqual(list.upcoming.map((a) => a.id), [mine.id]);
@@ -758,6 +772,10 @@ test("forms filled from a visit's intake link show on the client's Admin profile
   assert.equal((await save("consent", { treatment: true, privacy: true, financial: true, signature: "Pat Doe" })).body.done, true);
   const admin = await s.adminToken();
   const cid = (await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].id;
+  // an account that has only typed the email does not inherit the visit's documents
+  assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].documents.done, 0);
+  assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].emailVerified, false);
+  prove(s);
   assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].documents.done, 4);
   assert.equal((await s.call("GET", `/api/admin/clients/${cid}`, undefined, admin)).body.documents.complete, true);
   const cv = (await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, admin));
@@ -816,7 +834,7 @@ const fakeResend = async (t) => {
   return { sent, waitFor, cfg: { resendKey: "re_test", resendUrl: `http://127.0.0.1:${srv.address().port}`, notifyFrom: "MD Fit <hello@example.com>" } };
 };
 
-test("every new account gets a welcome email from the app (password, Google-style auto-create)", async (t) => {
+test("every new account gets a welcome email from the app; signing in never creates an account", async (t) => {
   const mail = await fakeResend(t);
   const s = await start(mail.cfg); t.after(s.close);
   await signup(s);
@@ -828,10 +846,10 @@ test("every new account gets a welcome email from the app (password, Google-styl
   assert.ok(!/pain|diagnos|injur/i.test(w.text), "no health details in the welcome");
   // the owner still gets the new-account alert, separately
   assert.equal((await mail.waitFor(/^New client account: Pat Doe$/)).length, 1);
-  // an account auto-created at login gets one too
-  await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "lee-pass-123", name: "Lee Park", create: true });
-  const welcomes = await mail.waitFor(/^Welcome to MD Fit$/, 2);
-  if (welcomes.length === 2) assert.deepEqual(welcomes[1].to, ["lee@example.com"]);
+  // signing in with an unknown email creates nothing and welcomes nobody
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "lee-pass-123", name: "Lee Park", create: true })).status, 401);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(mail.sent.filter((m) => /^Welcome to MD Fit$/.test(m.subject)).length, 1);
 });
 
 test("paying members get a receipt: on the first payment and on each monthly renewal, never twice for one invoice", async (t) => {
@@ -888,8 +906,9 @@ test("a member can close their account: no chart means erased, a chart means the
   assert.equal(gone.status, 200); assert.equal(gone.body.mode, "erase");
   assert.equal(s.readJson("clients").length, 0, "the account row is gone");
   assert.equal((await s.call("GET", "/api/me", undefined, a.token)).status, 401, "the old token stops working");
-  // logging in again just starts a brand-new, empty account (this app creates one for an unknown email)
-  const again = await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" });
+  // the old login is gone (signing in never creates an account); signing up again starts a brand-new, empty account
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" })).status, 401);
+  const again = await signup(s);
   assert.equal(again.status, 201);
   assert.notEqual(again.body.client.id, a.client.id, "it is a new account, not the old one revived");
 
@@ -906,9 +925,87 @@ test("a member can close their account: no chart means erased, a chart means the
   assert.equal(rec.phone, ""); assert.equal(rec.passwordHash, null); assert.ok(rec.deletedAt);
   assert.equal(rec.painLog.length, 1, "the pain diary stays on the chart");
   assert.equal((await s.call("GET", "/api/me", undefined, b.token)).status, 401, "their session is dead");
-  const fresh = await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "pat-pass-123" });
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "pat-pass-123" })).status, 401);
+  const fresh = await signup(s, { email: "lee@example.com" });
   assert.equal(fresh.status, 201);
   assert.notEqual(fresh.body.client.id, b.client.id, "signing up again does not reopen the closed record");
   assert.notEqual(fresh.body.client.name, "Closed account");
   assert.ok(s.readJson("clients").some((x) => x.id === b.client.id && x.deletedAt), "the closed chart is still there");
+});
+
+// ---- An email address alone proves nothing (Nov 2026 security fix)
+test("a stranger who knows a patient's email cannot see or cancel that patient's visits", async (t) => {
+  const s = await start(); t.after(s.close);
+  const visit = (await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "09:00", name: "Jane Roe", email: "jane@example.com", phone: "941-555-0111", notes: "Low back, worse sitting", areas: ["Lower back"], painLevel: 6 })).body.appointment;
+  assert.ok(visit.id);
+  // signing in with her email and any password does not create an account
+  const guess = await s.call("POST", "/api/clients/login", { email: "jane@example.com", password: "anything-8" });
+  assert.equal(guess.status, 401); assert.equal(guess.body.token, undefined);
+  const A = await s.adminToken();
+  assert.equal((await s.call("GET", "/api/admin/clients", undefined, A)).body.length, 0, "no account was made");
+  // registering her email gives an account, but not her visits
+  const squat = await signup(s, { name: "Not Jane", email: "jane@example.com", password: "stranger-pass-1" });
+  assert.equal(squat.status, 201); assert.equal(squat.body.client.emailVerified, false);
+  const tok = squat.body.token;
+  const mine = (await s.call("GET", "/api/me/appointments", undefined, tok)).body;
+  assert.deepEqual([mine.upcoming.length, mine.past.length], [0, 0]);
+  assert.equal((await s.call("POST", `/api/me/appointments/${visit.id}/cancel`, {}, tok)).status, 404);
+  assert.deepEqual((await s.call("GET", "/api/me/chart", undefined, tok)).body.visits, []);
+  assert.equal((await s.call("GET", "/api/admin/appointments?all=1", undefined, A)).body.find((a) => a.id === visit.id).status, "booked", "her visit is untouched");
+  // a visit the account books itself while signed in is its own
+  const own = await fetch(s.base + "/api/appointments", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + tok },
+    body: JSON.stringify({ typeId: "eval", date: "2026-11-04", time: "09:00", name: "Not Jane", email: "jane@example.com", phone: "941-555-0100" }) });
+  assert.equal(own.status, 201);
+  assert.equal((await s.call("GET", "/api/me/appointments", undefined, tok)).body.upcoming.length, 1);
+});
+
+test("confirming the email with a code brings in the visits booked as a guest; codes cannot be guessed at scale", async (t) => {
+  const mail = await fakeResend(t);
+  const s = await start({ ...mail.cfg, notifyGapMs: 0 }); t.after(s.close);
+  const visit = (await s.call("POST", "/api/appointments", { typeId: "eval", date: "2026-11-03", time: "09:00", name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100" })).body.appointment;
+  const tok = (await signup(s)).body.token;
+  assert.equal((await s.call("GET", "/api/me/appointments", undefined, tok)).body.upcoming.length, 0);
+  assert.equal((await s.call("POST", "/api/me/email/code", {}, tok)).status, 200);
+  const code = (await mail.waitFor(/is your MD Fit code/))[0].text.match(/\b(\d{6})\b/)[1];
+  const wrong = code === "000000" ? "000001" : "000000";
+  assert.equal((await s.call("POST", "/api/me/email/verify", { code: wrong }, tok)).status, 400);
+  const ok = await s.call("POST", "/api/me/email/verify", { code }, tok);
+  assert.equal(ok.status, 200); assert.equal(ok.body.client.emailVerified, true);
+  assert.deepEqual((await s.call("GET", "/api/me/appointments", undefined, tok)).body.upcoming.map((a) => a.id), [visit.id]);
+  assert.equal((await s.call("GET", "/api/me", undefined, tok)).body.client.emailVerified, true);
+  // a second account: wrong tries are counted per account across fresh codes
+  const t2 = (await signup(s, { email: "lee@example.com", name: "Lee Park" })).body.token;
+  let last = 0;
+  for (let i = 0; i < 4 && last !== 429; i++) {
+    await s.call("POST", "/api/me/email/code", {}, t2);
+    for (let k = 0; k < 5 && last !== 429; k++) last = (await s.call("POST", "/api/me/email/verify", { code: "12" + i + k + "99" }, t2)).status;
+  }
+  assert.equal(last, 429, "asking for a fresh code does not buy fresh guesses");
+});
+
+test("a forgotten-password code also proves the address; a reset link from Admin does not", async (t) => {
+  const mail = await fakeResend(t);
+  const s = await start({ ...mail.cfg, notifyGapMs: 0 }); t.after(s.close);
+  const cid = (await signup(s)).body.client.id;
+  const A = await s.adminToken();
+  const link = (await s.call("POST", `/api/admin/clients/${cid}/reset-link`, {}, A)).body;
+  const adminTok = decodeURIComponent(String(link.url || "").split("reset=")[1] || "");
+  assert.ok(adminTok, "Admin hands out a reset link");
+  assert.equal((await s.call("POST", "/api/clients/reset", { token: adminTok, password: "new-pass-1234" })).body.client.emailVerified, false);
+  await s.call("POST", "/api/clients/forgot", { identifier: "pat@example.com" });
+  const code = (await mail.waitFor(/is your MD Fit code/)).pop().text.match(/\b(\d{6})\b/)[1];
+  const rt = (await s.call("POST", "/api/clients/verify-code", { identifier: "pat@example.com", code })).body.resetToken;
+  assert.equal((await s.call("POST", "/api/clients/reset", { token: rt, password: "newer-pass-1234" })).body.client.emailVerified, true);
+});
+
+test("wrong passwords are counted per account: another account's sign-in does not buy more guesses", async (t) => {
+  const s = await start(); t.after(s.close);
+  await signup(s);
+  await signup(s, { email: "mallory@example.com", name: "Mal Lory", password: "mallory-pass-1" });
+  const bad = () => s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "wrong-pass" });
+  for (let i = 0; i < 9; i++) assert.equal((await bad()).status, 401);
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "mallory@example.com", password: "mallory-pass-1" })).status, 200);
+  assert.equal((await bad()).status, 401); // the tenth
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" })).status, 429, "locked even with the right password");
+  assert.equal((await s.call("POST", "/api/clients/login", { email: "mallory@example.com", password: "mallory-pass-1" })).status, 200, "other accounts are not locked");
 });

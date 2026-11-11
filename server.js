@@ -1267,7 +1267,10 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
   // A member's own group classes. Bookings are keyed by the email the class was booked under, which is how the
   // public /events page saves them, so a member sees the classes they booked there without booking again here.
+  // Matched by email only once the member has proved the address is theirs (emailed code, Google or Apple): anyone
+  // can type someone else's email into a sign-up form, and these rows carry the booking's cancel link.
   cl.me.get("/classes", (req, res) => {
+    if (!req.client.emailVerifiedAt) return res.json({ upcoming: [], past: [] });
     const email = String(req.client.email || "").toLowerCase();
     const { date: today, time: nowTime } = nowParts(cfg.tz, cfg.now());
     const byId = new Map(classes().map((c) => [c.id, c]));
@@ -1306,7 +1309,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   app.set("nudge", () => {
     try {
       const { date: today } = nowParts(cfg.tz, cfg.now());
-      const byEmail = new Map(cl.clients().map((c) => [String(c.email || "").toLowerCase(), c.id]));
+      // A class booked by email belongs to an account only once that account's address is proven (emailVerifiedAt)
+      const byEmail = new Map(cl.clients().filter((c) => c.emailVerifiedAt).map((c) => [String(c.email || "").toLowerCase(), c.id]));
       const booked = store.read("bookings", []).filter((b) => b.date >= today)
         .map((b) => ({ ...b, clientId: byEmail.get(String(b.email || "").toLowerCase()) || null }));
       nudges.sweep(booked);
