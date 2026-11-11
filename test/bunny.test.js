@@ -23,9 +23,10 @@ const ASSETS = [
 ];
 
 async function fakes() {
-  const seen = { cloudinary: [], bunnyCreate: [], bunnyUpload: [], bunnyDelete: [] };
+  const seen = { cloudinary: [], bunnyCreate: [], bunnyUpload: [], bunnyDelete: [], bunnyCollList: [], bunnyCollCreate: [] };
   // encode: what Bunny reports for an uploaded video (status 4 = resolution finished, 2 = still encoding, 5 = failed)
-  const state = { failUpload: new Set(), encode: { status: 4, encodeProgress: 100, availableResolutions: "360p,720p" } };
+  const state = { failUpload: new Set(), encode: { status: 4, encodeProgress: 100, availableResolutions: "360p,720p" },
+    collections: [], failCollections: false };
   let guidSeq = 0;
   const titleOf = {}; // guid -> title, so the test can tell which asset an upload belongs to
   const srv = http.createServer(async (req, res) => {
@@ -33,12 +34,28 @@ async function fakes() {
     const json = (code, o) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (u.pathname === "/data/media-manifest.json") return json(200, { version: "t", count: ASSETS.length, assets: ASSETS });
     if (u.pathname === "/public") { res.writeHead(200, { "content-type": "video/mp4" }); return res.end(Buffer.alloc(96, 3)); }
+    if (u.pathname === "/bunny/library/lib42/collections") {
+      if (req.headers.accesskey !== "bunny-key") return json(401, { Message: "bad key" });
+      if (state.failCollections) return json(500, { Message: "collections down" });
+      if (req.method === "GET") {
+        const q = u.searchParams.get("search") || "";
+        seen.bunnyCollList.push(q);
+        // Bunny's search is fuzzy: a near-miss comes back too, which is why the client matches the name exactly
+        return json(200, { items: state.collections.filter((c) => c.name.toLowerCase().includes(q.toLowerCase())) });
+      }
+      let b = ""; for await (const c of req) b += c;
+      const name = (JSON.parse(b || "{}") || {}).name;
+      const guid = `coll-${state.collections.length + 1}`;
+      state.collections.push({ guid, name });
+      seen.bunnyCollCreate.push(name);
+      return json(200, { guid, name });
+    }
     if (u.pathname === "/bunny/library/lib42/videos") { // create
       let b = ""; for await (const c of req) b += c;
       const title = (JSON.parse(b || "{}") || {}).title;
       if (req.headers.accesskey !== "bunny-key") return json(401, { Message: "bad key" });
       const guid = `guid-${++guidSeq}`; titleOf[guid] = title;
-      seen.bunnyCreate.push({ title, guid, auth: !!req.headers.accesskey });
+      seen.bunnyCreate.push({ title, guid, auth: !!req.headers.accesskey, collectionId: (JSON.parse(b || "{}") || {}).collectionId });
       return json(200, { guid, title });
     }
     const m = u.pathname.match(/^\/bunny\/library\/lib42\/videos\/([^/]+)$/);
@@ -303,5 +320,84 @@ test("media sync: an interrupted mirror resumes where it stopped", async (t) => 
   assert.equal(two.st.job.total, 1); assert.equal(two.st.job.ok, 1);
   assert.deepEqual(two.st.mirror, { videos: 2, onBoth: 2, bunnyPending: 0, bunnyMissing: 0, failed: 0 });
   assert.deepEqual(f.seen.bunnyUpload.map((u) => u.title).sort(), ["clip-one", "clip-two"], "nothing uploaded twice");
+  assert.deepEqual(Object.keys((await call("GET", "/api/videos")).body.bunny.map).sort(), ["clip-one", "clip-two"]);
+});
+
+// Dr. Jared files everything the app plays under a Bunny collection called "In app", so the library stays readable
+// next to the raw footage he uploads by hand.
+test("bunny client: the 'In app' collection is found or created, then reused", async () => {
+  const calls = [];
+  let coll = null;
+  const fetchImpl = async (url, opt = {}) => {
+    calls.push({ url, method: opt.method || "GET", body: opt.body });
+    if (/\/collections\?/.test(url)) return { ok: true, status: 200, json: async () => ({ items: coll ? [coll] : [] }), text: async () => "" };
+    if (/\/collections$/.test(url)) { coll = { guid: "coll-1", name: JSON.parse(opt.body).name }; return { ok: true, status: 200, json: async () => coll, text: async () => "" }; }
+    return { ok: true, status: 200, json: async () => ({ guid: "vid-1" }), text: async () => "" };
+  };
+  const b = createBunny({ apiKey: "k", libraryId: "7", host: "vz.b-cdn.net", fetchImpl });
+
+  assert.equal(await b.collection("In app"), "coll-1", "created when the library has none");
+  assert.equal(calls[0].url, "https://video.bunnycdn.com/library/7/collections?page=1&itemsPerPage=100&search=In%20app");
+  assert.equal(calls[1].method, "POST");
+  assert.equal(JSON.parse(calls[1].body).name, "In app");
+
+  // a sync run creates hundreds of videos and must not ask hundreds of times
+  assert.equal(await b.collection("In app"), "coll-1");
+  assert.equal(calls.length, 2, "the second call is served from memory");
+
+  // a fresh client finds the existing one instead of making a duplicate
+  const b2 = createBunny({ apiKey: "k", libraryId: "7", host: "vz.b-cdn.net", fetchImpl });
+  assert.equal(await b2.collection("In app"), "coll-1");
+  assert.equal(calls.filter((c) => c.method === "POST" && /\/collections$/.test(c.url)).length, 1);
+
+  // the guid rides along on create
+  await b.createVideo("Hip Switch", "coll-1");
+  const made = calls.find((c) => /\/videos$/.test(c.url) && c.method === "POST");
+  assert.deepEqual(JSON.parse(made.body), { title: "Hip Switch", collectionId: "coll-1" });
+});
+
+test("bunny client: an exact name beats Bunny's fuzzy search, and no collection means no collectionId", async () => {
+  const items = [{ guid: "coll-9", name: "In app archive" }, { guid: "coll-4", name: "In app" }];
+  const bodies = [];
+  const fetchImpl = async (url, opt = {}) => {
+    bodies.push({ url, body: opt.body });
+    if (/\/collections\?/.test(url)) return { ok: true, status: 200, json: async () => ({ items }), text: async () => "" };
+    return { ok: true, status: 200, json: async () => ({ guid: "vid-1" }), text: async () => "" };
+  };
+  const b = createBunny({ apiKey: "k", libraryId: "7", host: "h", fetchImpl });
+  assert.equal(await b.collection("In app"), "coll-4", "not the fuzzy 'In app archive' match");
+
+  await b.createVideo("Hip Switch");
+  const made = bodies.find((c) => /\/videos$/.test(c.url));
+  assert.deepEqual(JSON.parse(made.body), { title: "Hip Switch" }, "no empty collectionId sent");
+});
+
+test("media sync: every mirrored video lands in the 'In app' collection", async (t) => {
+  withBunny(true); t.after(() => withBunny(false));
+  const f = await fakes(); t.after(f.close);
+  const { call } = await start(t, f);
+  const adm = await login(call);
+  const { st } = await sync(call, adm);
+
+  assert.equal(st.job.failed, 0);
+  assert.deepEqual(f.seen.bunnyCollCreate, ["In app"], "created once, not once per video");
+  assert.equal(f.seen.bunnyCollList.length, 1, "and looked up once");
+  assert.equal(f.seen.bunnyCreate.length, 2);
+  for (const c of f.seen.bunnyCreate) assert.equal(c.collectionId, "coll-1", `${c.title} was filed`);
+  // and the videos are still playable, i.e. the collection didn't disturb the readiness gate
+  assert.deepEqual(Object.keys((await call("GET", "/api/videos")).body.bunny.map).sort(), ["clip-one", "clip-two"]);
+});
+
+test("media sync: a collection outage still gets the videos uploaded", async (t) => {
+  withBunny(true); t.after(() => withBunny(false));
+  const f = await fakes(); t.after(f.close);
+  f.state.failCollections = true; // the collection is cosmetic; the guid is not
+  const { call } = await start(t, f);
+  const adm = await login(call);
+  const { st } = await sync(call, adm);
+
+  assert.equal(st.job.failed, 0, "no video was lost to a folder error");
+  assert.equal(f.seen.bunnyUpload.length, 2);
+  for (const c of f.seen.bunnyCreate) assert.equal(c.collectionId, undefined, "unfiled rather than not uploaded");
   assert.deepEqual(Object.keys((await call("GET", "/api/videos")).body.bunny.map).sort(), ["clip-one", "clip-two"]);
 });
