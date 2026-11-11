@@ -110,6 +110,49 @@ test("scribe: a failing model service is reported and nothing is saved", async (
   assert.equal(r.status, 502); assert.match(r.body.error, /Nothing was saved/);
 });
 
+// A stand-in AI service that answers each request with the next reply in a list
+async function scripted(t, replies) {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    req.resume(); req.on("end", () => {
+      const r = replies[Math.min(seen.length, replies.length - 1)]; seen.push(1);
+      res.writeHead(r.status, { "content-type": "application/json", ...(r.headers || {}) });
+      res.end(JSON.stringify(r.status === 200 ? { choices: [{ message: { content: "Drafted after a wait." } }] } : r.body || {}));
+    });
+  }).listen(0);
+  await new Promise((r) => srv.once("listening", r));
+  t.after(() => srv.close());
+  return { seen, cfg: { scribe: { url: `http://127.0.0.1:${srv.address().port}/v1`, key: "test-key-not-real", model: "test-model" } } };
+}
+
+test("scribe: a momentary 'too many requests' is tried once more; a refusal says why in plain words", async (t) => {
+  // rate limited, then fine: staff get the draft
+  const busy = await scripted(t, [{ status: 429, body: { error: { type: "rate_limit_reached_error", message: "Too many requests" } } }, { status: 200 }]);
+  let s = await start(busy.cfg); t.after(s.close);
+  let r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, await s.adminToken());
+  assert.equal(r.status, 200); assert.equal(r.body.draft, "Drafted after a wait."); assert.equal(busy.seen.length, 2);
+
+  // no credit: not retried, and the reason is spelled out without leaking anything shaped like a key or an address
+  const broke = await scripted(t, [{ status: 429, body: { error: { type: "exceeded_current_quota_error", message: "Account org-abc123def456 owner@example.com is suspended due to insufficient balance" } } }]);
+  s = await start(broke.cfg); t.after(s.close);
+  r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, await s.adminToken());
+  assert.equal(r.status, 502); assert.equal(broke.seen.length, 1);
+  assert.match(r.body.error, /no credit or allowance left/); assert.match(r.body.error, /insufficient balance/); assert.match(r.body.error, /Nothing was saved/);
+  assert.doesNotMatch(r.body.error, /abc123|owner@example/);
+
+  // still rate limited after the second try
+  const slow = await scripted(t, [{ status: 429, body: { error: { message: "RPM limit reached" } } }]);
+  s = await start(slow.cfg); t.after(s.close);
+  r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, await s.adminToken());
+  assert.equal(slow.seen.length, 2); assert.match(r.body.error, /over its rate limit/);
+
+  // a key the service does not accept: say so, and never repeat what the service wrote back
+  const bad = await scripted(t, [{ status: 401, body: { error: { message: "Incorrect API key provided: sk-live-0123456789" } } }]);
+  s = await start(bad.cfg); t.after(s.close);
+  r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, await s.adminToken());
+  assert.match(r.body.error, /did not accept the key/); assert.doesNotMatch(r.body.error, /sk-live|0123456789/);
+});
+
 test("scribe: only https services (or a model on this machine) can be connected; names are swapped whole", () => {
   assert.equal(settingsFrom({ scribe: { url: "http://api.example.com/v1", key: "k", model: "m" } }).enabled, false, "plain http to another host is refused");
   assert.equal(settingsFrom({ scribe: { url: "https://api.example.com/v1", key: "k", model: "m" } }).enabled, true);

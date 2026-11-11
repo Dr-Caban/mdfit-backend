@@ -773,6 +773,8 @@ test("forms filled from a visit's intake link show on the client's Admin profile
   const admin = await s.adminToken();
   const cid = (await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].id;
   // an account that has only typed the email does not inherit the visit's documents
+  const none = await s.call("GET", `/api/admin/clients/${cid}/intake`, undefined, admin);
+  assert.equal(none.status, 200, "nothing on file is an ordinary answer, not an error"); assert.deepEqual(none.body.docs, []);
   assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].documents.done, 0);
   assert.equal((await s.call("GET", "/api/admin/clients", undefined, admin)).body[0].emailVerified, false);
   prove(s);
