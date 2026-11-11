@@ -1297,6 +1297,21 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   admin.get("/push", (req, res) => res.json({ enabled: push.enabled, ios: push.apns, android: push.fcm, devices: store.read("devices", []).length }));
   // Visit reminders (day before at 6 PM, and an hour before) for members with the app
   app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
+  // Achievements (a new gem, a badge, the daily goal), the evening streak nudge, and group-class reminders.
+  // One sweep, every minute; everything it sends is recorded so nothing goes out twice.
+  const nudges = require("./lib/nudges").createNudges({
+    store, clients: cl.clients, save: cl.save, push, rewardsOf: cl.rewardsOf,
+    nowParts, zonedToUtc, prettyTime, tz: cfg.tz, now: cfg.now, logger
+  });
+  app.set("nudge", () => {
+    try {
+      const { date: today } = nowParts(cfg.tz, cfg.now());
+      const byEmail = new Map(cl.clients().map((c) => [String(c.email || "").toLowerCase(), c.id]));
+      const booked = store.read("bookings", []).filter((b) => b.date >= today)
+        .map((b) => ({ ...b, clientId: byEmail.get(String(b.email || "").toLowerCase()) || null }));
+      nudges.sweep(booked);
+    } catch (err) { logger.warn("push_nudge_failed", { error: err.message }); }
+  });
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
@@ -1400,6 +1415,7 @@ if (require.main === module) {
   // Live calendar sync: check Google Calendar / SimplePractice every minute (CAL_WATCH_SECONDS, 0 = off)
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
+  setInterval(() => app.get("nudge")(), 60 * 1000).unref();        // achievements, streak nudge and class reminders
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
 
