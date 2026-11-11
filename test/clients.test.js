@@ -29,7 +29,8 @@ async function start(extra = {}) {
     return { status: res.status, body: await res.json().catch(() => undefined) };
   };
   const adminToken = async () => (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
-  return { call, adminToken, dataDir, base, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
+  const readJson = (name) => JSON.parse(fs.readFileSync(path.join(dataDir, name + ".json"), "utf8"));
+  return { call, adminToken, dataDir, base, readJson, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
 const signup = (s, over = {}) => s.call("POST", "/api/clients/signup", { name: "Pat Doe", email: "Pat@Example.com", phone: "941-555-0100", password: "pat-pass-123", ...over });
@@ -874,4 +875,40 @@ test("paying members get a receipt: on the first payment and on each monthly ren
   assert.equal(renewals.length, 1);
   assert.match(renewals[0].text, /Invoice MDFIT-0002/); assert.match(renewals[0].text, /https:\/\/invoice\.stripe\.com\/i\/abc/); assert.match(renewals[0].text, /\$200\.00/);
   assert.ok(!/pain|diagnos/i.test(renewals[0].text), "no health details on a receipt");
+});
+
+test("a member can close their account: no chart means erased, a chart means the record is kept", async (t) => {
+  const s = await start(); t.after(s.close);
+  // 1. a member who was never a patient is removed outright
+  const a = (await signup(s)).body;
+  assert.equal((await s.call("GET", "/api/me/account/deletion", undefined, a.token)).body.mode, "erase");
+  assert.equal((await s.call("POST", "/api/me/account/deletion", { confirm: "nope", password: "pat-pass-123" }, a.token)).status, 400);
+  assert.equal((await s.call("POST", "/api/me/account/deletion", { confirm: "DELETE", password: "wrong-one-123" }, a.token)).status, 401);
+  const gone = await s.call("POST", "/api/me/account/deletion", { confirm: "DELETE", password: "pat-pass-123" }, a.token);
+  assert.equal(gone.status, 200); assert.equal(gone.body.mode, "erase");
+  assert.equal(s.readJson("clients").length, 0, "the account row is gone");
+  assert.equal((await s.call("GET", "/api/me", undefined, a.token)).status, 401, "the old token stops working");
+  // logging in again just starts a brand-new, empty account (this app creates one for an unknown email)
+  const again = await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" });
+  assert.equal(again.status, 201);
+  assert.notEqual(again.body.client.id, a.client.id, "it is a new account, not the old one revived");
+
+  // 2. a member with a chart keeps the record and loses the account
+  const b = (await signup(s, { email: "lee@example.com" })).body;
+  await s.call("POST", "/api/me/pain", { area: "Lower back", level: 6, note: "after a long drive" }, b.token);
+  assert.equal((await s.call("GET", "/api/me/account/deletion", undefined, b.token)).body.mode, "close");
+  const closed = await s.call("POST", "/api/me/account/deletion", { confirm: "DELETE", password: "pat-pass-123" }, b.token);
+  assert.equal(closed.status, 200); assert.equal(closed.body.mode, "close");
+  const rec = s.readJson("clients").find((x) => x.id === b.client.id);
+  assert.ok(rec, "the record is kept for the retention period");
+  assert.equal(rec.name, "Closed account");
+  assert.equal(rec.email, `deleted+${b.client.id}@mdfit.invalid`);
+  assert.equal(rec.phone, ""); assert.equal(rec.passwordHash, null); assert.ok(rec.deletedAt);
+  assert.equal(rec.painLog.length, 1, "the pain diary stays on the chart");
+  assert.equal((await s.call("GET", "/api/me", undefined, b.token)).status, 401, "their session is dead");
+  const fresh = await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "pat-pass-123" });
+  assert.equal(fresh.status, 201);
+  assert.notEqual(fresh.body.client.id, b.client.id, "signing up again does not reopen the closed record");
+  assert.notEqual(fresh.body.client.name, "Closed account");
+  assert.ok(s.readJson("clients").some((x) => x.id === b.client.id && x.deletedAt), "the closed chart is still there");
 });
