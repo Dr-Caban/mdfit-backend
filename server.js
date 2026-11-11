@@ -1286,7 +1286,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       const c = cl.clients().find((x) => x.id === id); if (!c) return {};
       const { date: today } = nowParts(cfg.tz, cfg.now());
       const v = appointments().filter((a) => a.clientId === id && a.status === "booked" && a.date === today).sort((a, b) => (a.time < b.time ? -1 : 1))[0];
-      return { name: c.name, visit: v ? `${v.typeName || "Visit"} · ${prettyTime(v.time)}` : "" };
+      return { name: c.name, visit: v ? `${v.typeName || "Visit"} · ${prettyTime(v.time)}` : "", minutes: v ? v.minutes || 0 : 0 }; // minutes: the planned length, for the visit timer
     } }));
   // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
   const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
