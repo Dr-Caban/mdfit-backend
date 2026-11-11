@@ -437,3 +437,28 @@ test("api: with no Bunny configured the playback shape is still well formed", as
   assert.deepEqual(pub.bunny.res, {}, "a client iterating res must not get undefined");
   assert.equal(typeof pub.bunny.paths, "object");
 });
+
+// A transfer with no deadline can sit on an open socket forever, and the run is one loop: a single stuck asset stops
+// every asset behind it. This happened in production - the mirror went quiet mid-run with the CPU idle and no bytes
+// moving, and ~50 videos never went up. A stalled request must fail its own asset and let the loop carry on.
+test("bunny client: an upload that hangs is given up on, it does not wait forever", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bunny-h-")), tmp = path.join(dir, "in.bin");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(tmp, Buffer.alloc(32, 1));
+
+  // a stand-in that never answers, exactly like the socket that stalled
+  const hang = (url, opt = {}) => new Promise((_, reject) => {
+    if (opt.signal) opt.signal.addEventListener("abort", () => reject(opt.signal.reason || new Error("aborted")));
+  });
+  const b = createBunny({ apiKey: "k", libraryId: "7", host: "h", apiUrl: "http://x", fetchImpl: hang, timeoutMs: 150 });
+  // AbortSignal.timeout's timer is unref'd, so with nothing else pending the loop would empty and cancel this test
+  const keep = setInterval(() => {}, 25);
+  t.after(() => clearInterval(keep));
+
+  const started = Date.now();
+  await assert.rejects(() => b.uploadBytes("guid-1", tmp), /abort|timeout|TimeoutError/i, "a hung upload must reject");
+  const waited = Date.now() - started;
+  assert.ok(waited < 5000, `gave up after ${waited}ms`);
+  // the same deadline covers the JSON calls, so a hung create cannot wedge the run either
+  await assert.rejects(() => b.createVideo("x"), /abort|timeout|TimeoutError/i);
+});
