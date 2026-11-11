@@ -69,6 +69,14 @@ function loadConfig() {
     apnsSandbox: env("APNS_ENV") === "sandbox",
     fcmServiceAccount: env("FCM_SERVICE_ACCOUNT"), // Android: Firebase service-account JSON
     simplePracticeIcs: env("SIMPLEPRACTICE_ICS_URL"),
+    // AI scribe (lib/scribe.js): any OpenAI-compatible chat service. Off unless an address, a key and a model are set.
+    // Either the three SCRIBE_* variables, or AI_PROVIDER + AI_MODEL with that provider's own key variable.
+    scribe: (() => {
+      const known = { moonshot: { url: "https://api.moonshot.ai/v1", key: env("MOONSHOT_API_KEY") } };
+      const p = known[env("AI_PROVIDER").toLowerCase()] || {};
+      return { url: env("SCRIBE_API_URL") || env("AI_API_URL") || p.url || "", key: env("SCRIBE_API_KEY") || p.key || env("AI_API_KEY"), model: env("SCRIBE_MODEL") || env("AI_MODEL"),
+        temperature: env("SCRIBE_TEMPERATURE") };
+    })(),
     googleUrl: env("GOOGLE_PLACES_URL", "https://places.googleapis.com/v1"),
     googleLegacyUrl: env("GOOGLE_PLACES_LEGACY_URL", "https://maps.googleapis.com/maps/api/place"),
     googlePlaceId: env("GOOGLE_PLACE_ID"),
@@ -1391,6 +1399,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     notify.owner(`Video visit booked: ${appt.name}`, `${appt.name} (${appt.email}) booked ${appt.typeName} on ${when} and paid online.`);
   }
 
+  require("./lib/scribe").mountScribe({ admin, cfg, audit, limiter, logger, clients: cl.clients });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, ...cl });
 
   app.use("/api/admin", admin);
