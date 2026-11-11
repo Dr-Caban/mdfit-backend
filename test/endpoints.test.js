@@ -238,8 +238,9 @@ test("scheduling a video consultation with the link left blank uses the practice
   const s = await start(); t.after(s.close);
   const A = await s.adminToken();
   const { token: T, client } = (await signup(s)).body;
-  const consult = (link) => s.call("POST", `/api/admin/clients/${client.id}/consult`, { date: "2026-11-05", time: "13:00", minutes: 30, meetingLink: link, message: "" }, A);
-  assert.equal((await consult("")).status, 400, "no room saved yet: asks for a link");
+  const consult = (link, time = "13:00") => s.call("POST", `/api/admin/clients/${client.id}/consult`, { date: "2026-11-05", time, minutes: 30, meetingLink: link, message: "" }, A);
+  const builtIn = await consult("", "09:00");
+  assert.equal(builtIn.status, 201, "no outside link saved: the built-in room is used"); assert.match(builtIn.body.meetingLink, /\/visit$/);
   await s.call("PUT", "/api/admin/settings", { booking: { telehealthUrl: "https://zoom.us/j/777" } }, A);
   const r = await consult("");
   assert.equal(r.status, 201, JSON.stringify(r.body));

@@ -213,6 +213,9 @@ function createApp(cfg = loadConfig()) {
     store.write("settings", s);
   })();
 
+  // Where a video visit happens: an outside link if the practice saved one (Settings), otherwise the built-in room,
+  // which needs no set-up. Every booking, email and screen uses this one rule.
+  const videoRoom = (s) => (s && s.booking && s.booking.telehealthUrl) || (cfg.siteUrl ? `${String(cfg.siteUrl).replace(/\/+$/, "")}/visit` : "");
   const settings = () => {
     const d = defaultSettings(), s = store.read("settings", {});
     return {
@@ -687,7 +690,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const appt = {
       id: id(), ...a, typeName: type.name, minutes: type.minutes, status: "booked", adminNotes: "",
       cancelToken: newToken(), createdAt: new Date().toISOString(),
-      ...(type.remote && s.booking.telehealthUrl ? { meetingLink: s.booking.telehealthUrl } : {}),
+      ...(type.remote && videoRoom(s) ? { meetingLink: videoRoom(s) } : {}),
       ...(bookedBy ? { clientId: bookedBy.id } : {})
     };
     if (reward) { reward.rewardUsedAt = new Date().toISOString(); appt.rewardCode = reward.rewardCode; store.write("feedback", fb); }
@@ -1014,7 +1017,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     if (!type) return res.status(400).json({ error: "Pick an appointment type." });
     if (!notify.enabled || !cfg.siteUrl) return res.status(503).json({ error: "Email isn't set up (RESEND_API_KEY, SITE_URL)." });
     // A video visit is never sent without the way to join it
-    const room = (s.booking && s.booking.telehealthUrl) || "";
+    const room = videoRoom(s);
     if (type.remote && !room) return res.status(400).json({ error: "Add your Video visit link first (Home → Hours & sync), so the email includes the link to join the call." });
     const note = String(b.message || "").trim().slice(0, 500);
     const link = `${cfg.siteUrl}/book?type=${encodeURIComponent(type.id)}`;
@@ -1038,7 +1041,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     if (![15, 30, 45, 60, 90].includes(minutes)) return res.status(400).json({ error: "Length is 15, 30, 45, 60 or 90 minutes." });
     let link;
     // A blank link means the practice's video room
-    try { link = meetingUrl(String(b.meetingLink || "").trim() ? b.meetingLink : s.booking.telehealthUrl, "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
+    try { link = meetingUrl(String(b.meetingLink || "").trim() ? b.meetingLink : videoRoom(s), "Video link"); } catch (err) { return res.status(400).json({ error: err.message }); }
     if (!link) return res.status(400).json({ error: "Add a video link (or set the Video visit link in Booking)." });
     const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     const start = toMin(b.time), end = start + minutes;
@@ -1300,7 +1303,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   cl.me.get("/telehealth/ice", ice);
   // Whether Dr. Jared has asked this member to join a video session right now (the app shows a Join banner)
   cl.me.get("/telehealth/invite", (req, res) => res.json({ invited: app.get("telehealth").isInvited(req.client.id) }));
-  app.set("telehealth", tele.createTelehealth({ audit, logger, now: () => cfg.now().getTime(),
+  // The room starts as a live room (owner, Nov 2026): everyone admitted is a viewer until made a speaker. The host can
+  // switch it to a private one to one visit while the room is empty. TELEHEALTH_START=private makes that the default.
+  app.set("telehealth", tele.createTelehealth({ audit, logger, now: () => cfg.now().getTime(), live: (process.env.TELEHEALTH_START || "live") !== "private",
     // An invitation: a notice in the app, a push to their phone and an email. Each says only that there is a video
     // session to join and where; nothing about the member's care.
     invite: (id) => {
@@ -1450,9 +1455,11 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     notify.owner(`Video visit booked: ${appt.name}`, `${appt.name} (${appt.email}) booked ${appt.typeName} on ${when} and paid online.`);
   }
 
-  require("./lib/notes").mountNotes({ admin, store, cfg, audit, clients: cl.clients });
+  const notesApi = require("./lib/notes").mountNotes({ admin, store, cfg, audit, clients: cl.clients });
+  // Export of client data, for chosen clients or everyone: a spreadsheet, or full records (audited, staff only)
+  require("./lib/export").mountExport({ app, admin, audit, activity, limiter, clients: cl.clients, appointments, today: cl.today, toCsv, notesApi });
   require("./lib/scribe").mountScribe({ admin, cfg, audit, limiter, logger, clients: cl.clients, store });
-  require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, ...cl });
+  require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
 
   app.use("/api/admin", admin);
 

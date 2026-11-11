@@ -206,20 +206,16 @@ test("visits: the 30-minute $80 follow-up opens up once the evaluation is behind
   assert.equal(bookedFu.minutes, 30);
 });
 
-test("visits: with no video room and no online payment, the patient is told to call instead", async (t) => {
+test("visits: the built-in video room needs no set-up; with no online payment the patient is told to call instead", async (t) => {
   const s = await start(); // no Stripe client configured
   t.after(s.close);
   const pat = await signup(s);
   await fillDocs(s, pat.token);
   const opt = (await s.call("GET", "/api/me/visits/options", undefined, pat.token)).body;
-  assert.equal(opt.payOn, false); assert.equal(opt.room, false);
+  assert.equal(opt.payOn, false); assert.equal(opt.room, true, "no outside link is saved, and none is needed");
   const open = (await s.call("GET", "/api/me/visits/openings?service=eval-remote", undefined, pat.token)).body;
   const pick = firstOpening(open.days);
-  const no = await s.call("POST", "/api/me/visits/schedule", { service: "eval-remote", date: pick.date, time: pick.time }, pat.token);
-  assert.equal(no.status, 409);
-  assert.match(no.body.error, /941-313-0562/, "the phone number, not an error code");
   const adm = await s.adminToken();
-  await s.call("PUT", "/api/admin/settings", { booking: { telehealthUrl: ROOM } }, adm);
   const off = await s.call("POST", "/api/me/visits/schedule", { service: "eval-remote", date: pick.date, time: pick.time }, pat.token);
   assert.equal(off.status, 503);
   assert.match(off.body.error, /941-313-0562/);
