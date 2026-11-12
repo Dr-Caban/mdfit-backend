@@ -206,20 +206,23 @@ test("inviting: the member is told, shows as pending, and is let in on arrival; 
   doc.fire("tele_invite", { clientId: "pat1" }); await tick();
   assert.match(doc.last("tele_error").data.error, /a moment ago/); assert.equal(told.length, 1, "not told twice in a minute");
 
-  // arriving lets them straight in; nobody else gets in that way
+  // arriving lets them straight in, as a viewer (the empty private room opens as a live room for them)
   a.fire("tele_knock");
-  assert.deepEqual(a.last("tele_admitted").data, { role: "speaker", group: false });
+  assert.deepEqual(a.last("tele_admitted").data, { role: "viewer", group: true });
   assert.equal(doc.last("tele_started").data.clientId, "pat1"); assert.deepEqual(doc.last("tele_waiting").data.invited, []);
+  assert.equal(doc.last("tele_waiting").data.group, true);
   b.fire("tele_knock");
   assert.equal(b.last("tele_admitted"), undefined, "someone not invited waits to be admitted");
+  doc.fire("tele_end"); b.fire("tele_leave");
 
-  // invited while a private visit is on: they wait, and can be admitted once it ends
-  clock += 120000; doc.fire("tele_invite", { clientId: "lee2" }); await tick();
-  assert.equal(b.last("tele_admitted"), undefined); assert.deepEqual(doc.last("tele_waiting").data.waiting.map((w) => w.clientId), ["lee2"]);
-  doc.fire("tele_end");
-  doc.fire("tele_admit", { clientId: "lee2" });
+  // invited while a private one to one visit is on: they wait, and can be admitted once it ends
+  doc.fire("tele_group", { on: false });
+  b.fire("tele_knock"); doc.fire("tele_admit", { clientId: "lee2" });
   assert.deepEqual(b.last("tele_admitted").data, { role: "speaker", group: false });
-  doc.fire("tele_end");
+  clock += 120000; doc.fire("tele_invite", { clientId: "pat1" }); await tick();
+  a.got.length = 0; a.fire("tele_knock");
+  assert.equal(a.last("tele_admitted"), undefined, "a private visit is never opened by someone arriving"); assert.deepEqual(doc.last("tele_waiting").data.waiting.map((w) => w.clientId), ["pat1"]);
+  doc.fire("tele_end"); a.fire("tele_leave");
 
   // live room: an invited person comes in as a viewer, and can be made a speaker
   doc.fire("tele_group", { on: true });
@@ -282,4 +285,42 @@ test("a visit survives a server restart: it is put back only when the host and t
   const other = conn(), f = conn("new7"); tele2.staffJoin(other); tele2.patientJoin(f);
   other.fire("tele_resume", { group: true, people: [{ clientId: "new7", role: "speaker" }] }); f.fire("tele_here");
   assert.equal(doc2.last("tele_waiting").data.room.length, 2); assert.equal(f.last("tele_resumed"), undefined);
+});
+
+test("asking to speak: a viewer asks, the host sees it and admits them, and their camera comes on without a second question", async () => {
+  const audit = { rows: [], record(e) { this.rows.push(e); } };
+  let clock = 1000;
+  const tele = createTelehealth({ audit, live: true, now: () => clock, describe: (id) => ({ name: id === "pat1" ? "Pat Doe" : "Lee Other", device: id === "pat1" ? { label: "iPhone app", speak: false } : null }) });
+  const doc = conn(), a = conn("pat1"), b = conn("lee2");
+  tele.staffJoin(doc); tele.patientJoin(a); tele.patientJoin(b);
+  a.fire("tele_knock"); b.fire("tele_knock");
+  assert.deepEqual(doc.last("tele_waiting").data.waiting.map((w) => [w.clientId, w.device && w.device.label]), [["pat1", "iPhone app"], ["lee2", null]], "what each person is using is on the waiting-room row");
+  doc.fire("tele_admit", { clientId: "pat1" }); doc.fire("tele_admit", { clientId: "lee2" });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.role, m.asking]), [["pat1", "viewer", false], ["lee2", "viewer", false]]);
+
+  b.fire("tele_ask");
+  assert.deepEqual(doc.last("tele_asked").data, { clientId: "lee2", name: "Lee Other" });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.asking]), [["pat1", false], ["lee2", true]]);
+  assert.equal(a.got.some((x) => x.event === "tele_asked"), false, "other people in the room are not told who asked");
+  const n = doc.count("tele_asked"); b.fire("tele_ask");
+  assert.equal(doc.count("tele_asked"), n, "asking twice is one request");
+  // admitted: because they asked, the role change says so and no second question is put to them
+  doc.fire("tele_role", { clientId: "lee2", role: "speaker" });
+  assert.deepEqual(b.last("tele_role").data, { role: "speaker", asked: true });
+  assert.deepEqual(doc.last("tele_waiting").data.room.map((m) => [m.clientId, m.role, m.asking]), [["pat1", "viewer", false], ["lee2", "speaker", false]]);
+  // the host making someone a speaker unasked still asks them first
+  doc.fire("tele_role", { clientId: "pat1", role: "speaker" });
+  assert.deepEqual(a.last("tele_role").data, { role: "speaker" });
+  doc.fire("tele_role", { clientId: "pat1", role: "viewer" });
+  // "not now": the request is dropped and the person is told
+  clock += 6000; a.fire("tele_ask");
+  assert.equal(doc.last("tele_waiting").data.room[0].asking, true);
+  doc.fire("tele_role", { clientId: "pat1", role: "viewer" });
+  assert.equal(a.last("tele_ask_declined") !== undefined, true); assert.equal(doc.last("tele_waiting").data.room[0].asking, false);
+  // taking a request back; and a speaker cannot "ask"
+  clock += 6000; a.fire("tele_ask"); a.fire("tele_ask", { off: true });
+  assert.equal(doc.last("tele_waiting").data.room[0].asking, false);
+  const before = doc.count("tele_asked"); b.fire("tele_ask");
+  assert.equal(doc.count("tele_asked"), before);
+  assert.ok(audit.rows.some((r) => r.action === "telehealth.ask") && audit.rows.some((r) => r.action === "telehealth.dock" && r.meta.asked));
 });

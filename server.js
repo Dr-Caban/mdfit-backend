@@ -1356,8 +1356,12 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       const c = cl.clients().find((x) => x.id === id); if (!c) return {};
       const { date: today } = nowParts(cfg.tz, cfg.now());
       const v = appointments().filter((a) => a.clientId === id && a.status === "booked" && a.date === today).sort((a, b) => (a.time < b.time ? -1 : 1))[0];
-      return { name: c.name, visit: v ? `${v.typeName || "Visit"} · ${prettyTime(v.time)}` : "", minutes: v ? v.minutes || 0 : 0 }; // minutes: the planned length, for the visit timer
+      const pres = app.get("presenceApi");
+      return { name: c.name, visit: v ? `${v.typeName || "Visit"} · ${prettyTime(v.time)}` : "", minutes: v ? v.minutes || 0 : 0, device: pres ? pres.device(id) : null }; // minutes: the planned length, for the visit timer
     } }));
+  // What each member last opened MD Fit with (the app, or which browser on which kind of device), for the telehealth
+  // screen: known before anyone is invited, so the host can see who can speak and who can only watch.
+  admin.get("/telehealth/devices", (req, res) => { const pres = app.get("presenceApi"); res.json(pres ? pres.devices() : {}); });
   // ---- Push notification devices (the MD Fit iPhone app registers here after the member allows notifications)
   const deviceBody = (req) => ({ token: String((req.body && req.body.token) || ""), platform: String((req.body && req.body.platform) || "ios").slice(0, 20) });
   // A member's own group classes. Bookings are keyed by the email the class was booked under, which is how the
@@ -1493,6 +1497,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/economics").mountEconomics({ app, admin, store, logger, clients: cl.clients, appointments, tiers: pay.tiers, income: pay.income, today: cl.today,
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
+  require("./lib/invoicing").mountInvoicing({ app, admin, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
 
   app.use("/api/admin", admin);
 
