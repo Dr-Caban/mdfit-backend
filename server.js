@@ -75,10 +75,21 @@ function loadConfig() {
     // AI scribe (lib/scribe.js): any OpenAI-compatible chat service. Off unless an address, a key and a model are set.
     // Either the three SCRIBE_* variables, or AI_PROVIDER + AI_MODEL with that provider's own key variable.
     scribe: (() => {
-      const known = { moonshot: { url: "https://api.moonshot.ai/v1", key: env("MOONSHOT_API_KEY") } };
-      const p = known[env("AI_PROVIDER").toLowerCase()] || {};
-      return { url: env("SCRIBE_API_URL") || env("AI_API_URL") || p.url || "", key: env("SCRIBE_API_KEY") || p.key || env("AI_API_KEY"), model: env("SCRIBE_MODEL") || env("AI_MODEL"),
-        temperature: env("SCRIBE_TEMPERATURE") };
+      // The same provider names and key variables the owner's other products use, so one set of variables works in both
+      const known = {
+        moonshot: { url: "https://api.moonshot.ai/v1", key: env("MOONSHOT_API_KEY") },
+        openrouter: { url: "https://openrouter.ai/api/v1", key: env("OPENROUTER_API_KEY") },
+        // the same default model the owner's other product uses for this provider
+        openai: { url: "https://api.openai.com/v1", key: env("OPENAI_API_KEY"), model: "gpt-4o-mini" }
+      };
+      const first = env("AI_PROVIDER").toLowerCase(), p = known[first] || {};
+      // Backups: any other provider that has its key set and a model to use: its own model variable (MOONSHOT_MODEL,
+      // OPENROUTER_MODEL, OPENAI_MODEL) or, where there is one, the provider's default. They are tried in that order
+      // when the first service cannot answer. A key with no model is not used.
+      const modelOf = (name, k) => env(name.toUpperCase() + "_MODEL") || k.model || "";
+      const fallbacks = Object.entries(known).filter(([name, k]) => name !== first && k.key && modelOf(name, k)).map(([name, k]) => ({ url: k.url, key: k.key, model: modelOf(name, k) }));
+      return { url: env("SCRIBE_API_URL") || env("AI_API_URL") || p.url || "", key: env("SCRIBE_API_KEY") || p.key || env("AI_API_KEY"), model: env("SCRIBE_MODEL") || env("AI_MODEL") || (first ? env(first.toUpperCase() + "_MODEL") : "") || p.model || "",
+        temperature: env("SCRIBE_TEMPERATURE"), fallbacks };
     })(),
     googleUrl: env("GOOGLE_PLACES_URL", "https://places.googleapis.com/v1"),
     googleLegacyUrl: env("GOOGLE_PLACES_LEGACY_URL", "https://maps.googleapis.com/maps/api/place"),
