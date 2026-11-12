@@ -1421,6 +1421,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   });
   mountContent({ app, admin, store, notify, activity, ...cl });
   mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
+  require("./lib/board").mountBoard({ app, store, cfg, limiter, logger }); // private two-person notes board behind BOARD_PASSCODE
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   require("./lib/presence").mountPresence({ app, store, cfg, ...cl }); // time in app: heartbeats from the member app, minutes per day
