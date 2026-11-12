@@ -1516,7 +1516,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
   // The guide in the member app: answers counted per day on the server, reminders it saves, looks, and the owner's numbers
-  require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc,
+  // (AI answers reuse the scribe's connection and only run on a service that signs a business associate agreement: lib/guide-ai.js)
+  const guideAI = require("./lib/guide-ai").createGuideAI({ cfg, store, logger });
+  require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership });
 
   app.use("/api/admin", admin);
