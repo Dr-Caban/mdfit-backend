@@ -1159,6 +1159,23 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     res.json({ busy: out, titles: !!events, ...calsync.status() });
   });
 
+  // Add an event to the practice's Google Calendar from the workspace. What it is called is the owner's to write and
+  // goes to their own calendar; the ledger records that an event was added, not what it says.
+  admin.post("/calendar/events", async (req, res) => {
+    if (!calsync.googleOn() || !calsync.addEvent) return res.status(503).json({ error: "Google Calendar isn't connected, so there is nowhere to add this. Book a visit from a client's chart instead." });
+    const b = req.body || {};
+    const title = String(b.title || "").replace(/\s+/g, " ").trim().slice(0, 120);
+    const note = String(b.note || "").trim().slice(0, 500);
+    const minutes = Number(b.minutes);
+    if (!title) return res.status(400).json({ error: "Give the event a name." });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || "") || !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time || "")) return res.status(400).json({ error: "Pick a date and a start time." });
+    if (!Number.isInteger(minutes) || minutes < 5 || minutes > 720) return res.status(400).json({ error: "Length is between 5 minutes and 12 hours." });
+    let id;
+    try { id = await calsync.addEvent({ title, date: b.date, time: b.time, minutes, note }); }
+    catch (err) { logger.error("gcal_add_event_failed", { error: err.message }); return res.status(502).json({ error: "Google Calendar didn't accept the event. Check that the calendar is shared with edit access." }); }
+    if (audit) audit.record({ actor: "admin", action: "calendar.event_added", subject: "", ip: req.ip, meta: { date: b.date, minutes } });
+    res.status(201).json({ ok: true, id: id || null });
+  });
   admin.post("/calsync/test", async (req, res) => {
     const { date } = nowParts(cfg.tz, cfg.now());
     calsync.clear();
