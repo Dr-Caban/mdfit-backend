@@ -26,7 +26,7 @@ async function start(extra) {
 // A stand-in AI service: answers every request the same way and remembers what it was sent
 async function service(t, reply) {
   const seen = [];
-  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ auth: req.headers.authorization, body: JSON.parse(b || "{}") }); res.writeHead(reply.status, { "content-type": "application/json" }); res.end(JSON.stringify(reply.status === 200 ? { choices: [{ message: { content: reply.text } }] } : reply.body || {})); }); }).listen(0);
+  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ auth: req.headers.authorization, body: JSON.parse(b || "{}") }); res.writeHead(reply.status, { "content-type": "application/json" }); res.end(JSON.stringify(reply.status === 200 ? { ...(reply.model ? { model: reply.model } : {}), choices: [{ message: { content: reply.text } }] } : reply.body || {})); }); }).listen(0);
   await new Promise((r) => srv.once("listening", r)); t.after(() => srv.close());
   return { seen, url: `http://127.0.0.1:${srv.address().port}/v1` };
 }
@@ -47,6 +47,18 @@ test("scribe backups: the next service is tried when the first cannot answer; th
   assert.deepEqual(second.seen[0].body.messages, first.seen[0].body.messages, "the backup is sent the same de-identified text");
   const entry = ((await s.call("GET", "/api/admin/audit?action=scribe", undefined, A)).body.entries || []).find((e) => e.action === "scribe.draft");
   assert.equal(entry.meta.model, "backup-model"); assert.match(entry.meta.backup, /^127\.0\.0\.1/);
+});
+
+test("scribe backups: a router names the model it actually used, and that is what is reported and logged", async (t) => {
+  const first = await service(t, { status: 404, body: { error: { message: "Not found the model" } } });
+  const router = await service(t, { status: 200, text: "Drafted by a free model.", model: "some-lab/real-model:free" });
+  const s = await start({ scribe: { url: first.url, key: "k1", model: "first-model", fallbacks: [{ url: router.url, key: "k2", model: "openrouter/free" }] } });
+  t.after(s.close);
+  const A = await s.adminToken();
+  const r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT }, A);
+  assert.equal(r.status, 200); assert.equal(router.seen[0].body.model, "openrouter/free"); assert.equal(r.body.model, "some-lab/real-model:free"); assert.equal(r.body.backup, true);
+  const entry = ((await s.call("GET", "/api/admin/audit?action=scribe", undefined, A)).body.entries || []).find((e) => e.action === "scribe.draft");
+  assert.equal(entry.meta.model, "some-lab/real-model:free");
 });
 
 test("scribe backups: when no service can answer, each reason is given and nothing is saved", async (t) => {
