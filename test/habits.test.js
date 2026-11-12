@@ -48,8 +48,8 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.equal((await s.call("GET", "/api/me/habits/today")).status, 401);
   const first = (await today(s, tok)).body;
   assert.equal(first.date, "2026-11-02");
-  assert.equal(first.points, 0); assert.equal(first.goal, 50); assert.equal(first.goalLevel, "beginner");
-  assert.deepEqual(first.goalLevels, { beginner: 50, intermediate: 75, pro: 100 });
+  assert.equal(first.points, 0); assert.equal(first.goal, 50); assert.equal(first.goalLevel, "amateur");
+  assert.deepEqual(first.goalLevels, { novice: 30, amateur: 50, advanced: 75, elite: 100 });
   // Owner's rule: 5 XP, or 10 for the demanding ones
   const want = { sunlight: 5, acupressure: 10, "foam-rolling": 10, "ice-bath": 10, "health-shot": 5, prayer: 5, meditation: 5, grounding: 5, "box-breathing": 5,
     walk: 5, sauna: 5, stretching: 5, yoga: 10, "no-screens": 10, massage: 5, journaling: 5, "red-light": 5, "active-recreation": 10, "challenge-send": 5, "challenge-do": 10 };
@@ -120,7 +120,7 @@ test("admins edit the list; past checks keep the XP they were earned with", asyn
   assert.equal((await check(s, tok, "red-light")).status, 400);
 });
 
-test("daily XP norms: Beginner 50, Intermediate 75, Pro 100; a day qualifies on activities alone or with a workout", async (t) => {
+test("daily XP norms: Novice 30, Amateur 50, Advanced 75, Elite 100; a day qualifies on activities alone or with a workout", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
   let r = (await checkAll(s, tok, ["grounding", "box-breathing", "journaling"])).body; // 15
@@ -130,17 +130,19 @@ test("daily XP norms: Beginner 50, Intermediate 75, Pro 100; a day qualifies on 
   s.setDay(day(3));
   await workout(s, tok);
   r = (await today(s, tok)).body;
-  assert.equal(r.workoutXp, 30); assert.equal(r.total, 30); assert.equal(r.qualifying, false, "one 30-XP workout is short of the Beginner 50");
+  assert.equal(r.workoutXp, 30); assert.equal(r.total, 30); assert.equal(r.qualifying, false, "one 30-XP workout is short of the Amateur 50");
   r = (await checkAll(s, tok, ["ice-bath", "yoga"])).body;
   assert.equal(r.total, 50); assert.equal(r.qualifying, true); assert.equal(r.recoveryOnly, false);
   // raise the norm: applies from today, past goal days stay goal days
-  r = (await s.call("PUT", "/api/me/habits/goal", { level: "intermediate" }, tok)).body;
-  assert.equal(r.goalLevel, "intermediate"); assert.equal(r.goal, 75); assert.equal(r.qualifying, false); assert.equal(r.remaining, 25);
-  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "pro" }, tok)).body.goal, 100);
+  r = (await s.call("PUT", "/api/me/habits/goal", { level: "advanced" }, tok)).body;
+  assert.equal(r.goalLevel, "advanced"); assert.equal(r.goal, 75); assert.equal(r.qualifying, false); assert.equal(r.remaining, 25);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite" }, tok)).body.goal, 100);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "novice" }, tok)).body.goal, 30);
   assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite-ish" }, tok)).status, 400);
-  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "pro" })).status, 401);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite" })).status, 401);
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite" }, tok)).body.goal, 100);
   const hist = (await s.call("GET", "/api/me/habits/history?month=2026-11", undefined, tok)).body;
-  assert.equal(hist.days.find((d) => d.date === day(2)).qualifying, true, "Nov 2 was judged at Beginner 50");
+  assert.equal(hist.days.find((d) => d.date === day(2)).qualifying, true, "Nov 2 was judged at the 50 in force that day");
   s.setDay(day(4));
   assert.equal((await today(s, tok)).body.goal, 100, "the chosen norm carries forward");
 });
@@ -206,4 +208,27 @@ test("MD Fit pain tracks and Pain Tool protocols earn the program 50 XP", async 
   s.setDay(day(4));
   await workout(s, tok, { title: "Something else", key: "trackx" });
   assert.equal((await today(s, tok)).body.workoutXp, 30, "only real track/protocol keys count as a program");
+});
+
+// The levels were renamed (beginner/intermediate/pro -> novice/amateur/advanced/elite, with novice added at 30).
+// Members had already chosen under the old names, so the rename must not move anyone's daily goal or their history.
+test("goal levels: a member who chose under the old names keeps the same daily number", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: tok } = await signup(s);
+  // what the app sent before the rename
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "beginner" }, tok)).body.goal, 50);
+  assert.deepEqual(Object.keys(H.GOAL_LEVELS), ["novice", "amateur", "advanced", "elite"], "in the order members see them");
+  assert.deepEqual(Object.values(H.GOAL_LEVELS), [30, 50, 75, 100]);
+  assert.equal(H.DEFAULT_GOAL, 50, "someone who never chose is still held to 50");
+  // every old id maps to the level with the same number it had before
+  const BEFORE = { beginner: 50, intermediate: 75, pro: 100 };
+  for (const [was, now] of Object.entries(H.LEGACY_LEVELS)) {
+    assert.equal(H.GOAL_LEVELS[now], BEFORE[was], `${was} (${BEFORE[was]} XP) reads as ${now}`);
+    const r = (await s.call("PUT", "/api/me/habits/goal", { level: was }, tok)).body;
+    assert.equal(r.goalLevel, now); assert.equal(r.goal, BEFORE[was]);
+  }
+  // and a day that qualified at the old 50 still qualifies, on the lowest level too
+  assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "novice" }, tok)).body.goal, 30);
+  const r = (await goalDay(s, tok)).body;
+  assert.equal(r.total, 50); assert.equal(r.qualifying, true);
 });

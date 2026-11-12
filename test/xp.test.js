@@ -270,7 +270,7 @@ test("admin overview: one call with everything about a client", async (t) => {
   assert.ok(o.rewards.xp >= 30 + 5 + 5 + 35, "normal 30 + prayer 5 + challenge sent 5 + custom 35, plus badge bonuses"); assert.equal(o.rewards.gem.name, "Amber"); assert.ok(o.rewards.badges.length >= 1);
   assert.equal(o.challenges.sent, 1); assert.equal(o.challenges.recent[0].with, "Lee P.");
   assert.equal(o.pain.entries, 2); assert.equal(o.pain.trend, "improving"); assert.equal(o.favorites, 1);
-  assert.equal(o.habits.top30[0].name.toLowerCase().includes("prayer"), true); assert.equal(o.habits.goalLevel, "beginner");
+  assert.equal(o.habits.top30[0].name.toLowerCase().includes("prayer"), true); assert.equal(o.habits.goalLevel, "amateur");
   assert.equal(o.activity.days.length, 90); assert.equal(o.activity.summary.active30, 3);
   assert.equal(o.programs.builtWorkouts.length, 1); assert.equal(o.documents.total > 0, true); assert.equal(o.appointments.completed, 0);
   assert.equal((await s.call("GET", `/api/admin/clients/${a.client.id}/overview`, undefined, a.token)).status, 401);
