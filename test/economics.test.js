@@ -115,3 +115,32 @@ test("economics: running costs are the owner's to keep: saved as a list, checked
   const log = JSON.stringify((await s.call("GET", "/api/admin/audit", undefined, A)).body);
   assert.match(log, /admin\.change \/economics\/costs/, "the change is in the ledger");
 });
+
+test("economics: one month opened shows each payment with who paid and what kind, cash invoices by number, and never what anything was for", async (t) => {
+  const seen = [];
+  const stripeClient = { customers: { create: async () => ({ id: "cus_sam" }) }, balanceTransactions: { list: (q) => { seen.push(q); return each([
+    { type: "charge", currency: "usd", amount: 1995, fee: 88, created: at("2026-11-05T15:00:00Z"), source: { customer: "cus_sam", metadata: {}, description: "Subscription creation" } },
+    { type: "charge", currency: "usd", amount: 12000, fee: 378, created: at("2026-11-07T15:00:00Z"), source: { customer: "cus_unknown", metadata: { kind: "service" } } },
+    { type: "refund", currency: "usd", amount: -500, fee: 0, created: at("2026-11-08T15:00:00Z"), source: { charge: "ch_1" } },
+    { type: "payout", currency: "usd", amount: -9000, fee: 0, created: at("2026-11-09T15:00:00Z") },
+    { type: "charge", currency: "usd", amount: 5000, fee: 175, created: at("2026-11-01T03:30:00Z"), source: { customer: "cus_sam", metadata: { kind: "invoice" } } } // Oct 31 in the clinic
+  ]); } }, checkout: { sessions: { create: async () => ({ id: "cs_1", url: "https://pay.example.com/cs_1" }) } } };
+  const s = await start({ stripeClient, stripeSecretKey: "rk_test_made_up", stripeWebhookSecret: "whsec_made_up" }); t.after(s.close);
+  const A = await s.adminToken(), sam = await s.signup("Sam Sample");
+  // give Sam a Stripe customer the way the app does (a payment link for an invoice), and a cash invoice
+  const inv = (await s.call("POST", `/api/admin/emr/${sam.client.id}/invoices`, { amount: 40, description: "Private matter" }, A)).body;
+  assert.equal((await s.call("POST", `/api/admin/emr/${sam.client.id}/invoices/${inv.id}/paylink`, {}, A)).status, 200);
+  await s.call("POST", `/api/admin/emr/${sam.client.id}/invoices`, { amount: 25, description: "Another private matter", method: "cash" }, A);
+
+  assert.equal((await s.call("GET", "/api/admin/economics/month?m=2026-11")).status, 401);
+  assert.equal((await s.call("GET", "/api/admin/economics/month?m=November", undefined, A)).status, 400);
+  const r = await s.call("GET", "/api/admin/economics/month?m=2026-11", undefined, A);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.stripe.lines.map((x) => [x.kind, x.amount, x.fee, x.name, x.what]), [["refund", 500, 0, "", ""], ["charge", 12000, 378, "", "Visit"], ["charge", 1995, 88, "Sam Sample", "Membership"]], "newest first; the payout and the October payment are not in November");
+  assert.equal(r.body.stripe.lines[2].clientId, sam.client.id);
+  assert.equal(seen[0].expand[0], "data.source"); assert.ok(seen[0].created.lt > seen[0].created.gte);
+  assert.deepEqual(r.body.outside.map((x) => [x.amount, x.method, x.name, /^INV-/.test(x.number)]), [[2500, "cash", "Sam Sample", true]]);
+  assert.equal(/Private matter|cus_/.test(JSON.stringify(r.body)), false, "no invoice wording and no processor ids");
+  const oct = (await s.call("GET", "/api/admin/economics/month?m=2026-10", undefined, A)).body;
+  assert.deepEqual(oct.stripe.lines.map((x) => [x.amount, x.name, x.what]), [[5000, "Sam Sample", "Invoice"]]);
+});
