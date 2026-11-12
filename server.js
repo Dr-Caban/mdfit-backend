@@ -494,7 +494,8 @@ function createApp(cfg = loadConfig()) {
       else if (p === "/api/stripe/webhook" && ok) { actor = "stripe"; action = "payments.webhook"; }
       else if (req.admin && ok && !QUIET.has(key)) { actor = `admin:${req.admin}`; action = `admin.${m === "GET" ? "view" : "change"} ${route.replace("/api/admin", "")}`; }
       // (the app's once-a-minute "still open" beat touches no record of care and is not a ledger event: it was most of the ledger)
-      else if (req.client && ok && m !== "GET" && p !== "/api/me/presence") { actor = `client:${req.client.id}`; action = `client.${route.replace("/api/me", "") || "/"}`; }
+      // (nor are the guide's own counters: an answer counted or the guide opened; reminders and looks are still recorded)
+      else if (req.client && ok && m !== "GET" && p !== "/api/me/presence" && !p.startsWith("/api/me/guide/")) { actor = `client:${req.client.id}`; action = `client.${route.replace("/api/me", "") || "/"}`; }
       if (!action) return;
       audit.record({ actor, action, subject, ip: req.ip, meta: { method: m, status: res.statusCode } });
     });
@@ -1516,6 +1517,11 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
+  // The guide in the member app: answers counted per day on the server, reminders it saves, looks, and the owner's numbers
+  // (AI answers reuse the scribe's connection and only run on a service that signs a business associate agreement: lib/guide-ai.js)
+  const guideAI = require("./lib/guide-ai").createGuideAI({ cfg, store, logger });
+  require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
+    clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership });
 
   app.use("/api/admin", admin);
 
@@ -1546,6 +1552,7 @@ if (require.main === module) {
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
   setInterval(() => app.get("nudge")(), 60 * 1000).unref();        // achievements, streak nudge and class reminders
+  setInterval(() => app.get("guideRemind")(), 60 * 1000).unref();  // reminders a member asked the guide to save
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
 
