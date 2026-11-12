@@ -1508,7 +1508,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
 
   const notesApi = require("./lib/notes").mountNotes({ admin, store, cfg, audit, clients: cl.clients });
   // Export of client data, for chosen clients or everyone: a spreadsheet, or full records (audited, staff only)
-  require("./lib/export").mountExport({ app, admin, audit, activity, limiter, clients: cl.clients, appointments, today: cl.today, toCsv, notesApi });
+  const exportApi = require("./lib/export").mountExport({ app, admin, audit, activity, limiter, clients: cl.clients, appointments, today: cl.today, toCsv, notesApi });
+  app.set("backupApi", require("./lib/backup").mountBackup({ admin, store, cfg, audit, activity, limiter, notify, logger, exportApi, nowParts }));
   require("./lib/scribe").mountScribe({ admin, cfg, audit, limiter, logger, clients: cl.clients, store });
   require("./lib/refunds").mountRefunds({ app, admin, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   require("./lib/economics").mountEconomics({ app, admin, store, logger, clients: cl.clients, appointments, tiers: pay.tiers, income: pay.income, today: cl.today,
