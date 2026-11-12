@@ -1509,6 +1509,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // Export of client data, for chosen clients or everyone: a spreadsheet, or full records (audited, staff only)
   require("./lib/export").mountExport({ app, admin, audit, activity, limiter, clients: cl.clients, appointments, today: cl.today, toCsv, notesApi });
   require("./lib/scribe").mountScribe({ admin, cfg, audit, limiter, logger, clients: cl.clients, store });
+  require("./lib/refunds").mountRefunds({ app, admin, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   require("./lib/economics").mountEconomics({ app, admin, store, logger, clients: cl.clients, appointments, tiers: pay.tiers, income: pay.income, today: cl.today,
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
