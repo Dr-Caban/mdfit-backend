@@ -16,6 +16,7 @@ logger.level = 99;
 async function start() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-refund-"));
   const made = [], refunds = [], mail = [], sessions = new Map();
+  let refundCreate = null; // a test can make Stripe answer differently for one call
   // one charge per checkout; "cus_other" owns ch_other
   const charges = new Map([["ch_other", { id: "ch_other", status: "succeeded", amount: 5000, amount_refunded: 0, customer: "cus_other" }], ["ch_mine", { id: "ch_mine", status: "succeeded", amount: 2100, amount_refunded: 0, customer: "cus_1" }]]);
   const stripeClient = {
@@ -24,7 +25,7 @@ async function start() {
       create: async (o) => { const id = "cs_r_" + (made.length + 1), ch = { id: "ch_" + id, status: "succeeded", amount: o.line_items[0].price_data.unit_amount, amount_refunded: 0, customer: o.customer || null }; made.push(o); charges.set(ch.id, ch); sessions.set(id, { id, status: "open", payment_status: "unpaid", metadata: o.metadata, customer: o.customer, client_reference_id: o.client_reference_id, amount_total: ch.amount, payment_intent: { id: "pi_" + id, latest_charge: ch } }); return { id, url: "https://pay.example.com/" + id }; },
       retrieve: async (id) => sessions.get(id) } },
     charges: { retrieve: async (id) => { const c = charges.get(id); if (!c) throw new Error("No such charge"); return c; }, list: async () => ({ data: [] }) },
-    refunds: { create: async (o, opts) => { if (refunds.some((r) => r.key === opts.idempotencyKey)) return { id: "re_same" }; refunds.push({ ...o, key: opts.idempotencyKey }); const c = charges.get(o.charge); c.amount_refunded += o.amount; return { id: "re_" + refunds.length }; } },
+    refunds: { create: async (o, opts) => { if (refundCreate) return refundCreate(o, opts); if (refunds.some((r) => r.key === opts.idempotencyKey)) return { id: "re_same" }; refunds.push({ ...o, key: opts.idempotencyKey }); const c = charges.get(o.charge); c.amount_refunded += o.amount; return { id: "re_" + refunds.length }; } },
     invoices: { list: async () => ({ data: [] }) }, paymentMethods: { list: async () => ({ data: [] }) },
     webhooks: { constructEvent: (raw) => JSON.parse(raw) }
   };
@@ -39,7 +40,7 @@ async function start() {
   const signup = async (name) => (await call("POST", "/api/clients/signup", { name, email: name.toLowerCase().replace(/\W+/g, ".") + "@example.com", password: "made-up-pass-1" })).body;
   const hook = (sid) => { const s = sessions.get(sid); return fetch(base + "/api/stripe/webhook", { method: "POST", headers: { "content-type": "application/json", "stripe-signature": "x" }, body: JSON.stringify({ id: "evt_" + sid, type: "checkout.session.completed", created: 1793200000, data: { object: { ...s, payment_intent: s.payment_intent.id, mode: "payment", status: "complete", payment_status: "paid" } } }) }); };
   const mails = async () => { await new Promise((r) => setTimeout(r, 500)); return mail.map((m) => ({ to: [].concat(m.to).join(","), subject: m.subject, text: m.text || "" })); };
-  return { call, adminToken, signup, hook, mails, made, refunds, charges, sessions, close: () => { server.close(); post.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
+  return { call, adminToken, signup, hook, mails, made, refunds, charges, sessions, refundsCreate: null, setRefundCreate: (fn) => { refundCreate = fn; }, close: () => { server.close(); post.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
 test("refunds: the owner's password is asked every time; part or all goes back to the card once; cash is not refunded here", async (t) => {
@@ -110,4 +111,36 @@ test("refunds: an invoice sent to someone without an account can be refunded too
   for (let i = 0; i < 6; i++) assert.equal((await s.call("POST", u, { linkId: g.id, password: "guess" + i }, A)).status, 403);
   const locked = await s.call("POST", u, { linkId: g.id, password: "admin-pass-123" }, A);
   assert.equal(locked.status, 429); assert.match(locked.body.error, /fifteen minutes/);
+});
+
+test("refunds: Stripe holding a refund for approval says so, and is not confused with a key that may not refund", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken(), cal = await s.signup("Pat Pending"), id = cal.client.id, u = "/api/admin/refunds";
+  const inv = (await s.call("POST", `/api/admin/emr/${id}/invoices`, { description: "Session", amount: 40 }, A)).body;
+  await s.call("POST", `/api/admin/emr/${id}/invoices/${inv.id}/paylink`, {}, A);
+  assert.equal((await s.hook("cs_r_1")).status, 200);
+
+  // Stripe answers 403 with code "approval_required": the refund is waiting for a second person, not refused
+  s.charges.get("ch_cs_r_1");
+  const real = s.refundsCreate;
+  s.setRefundCreate(async () => { const e = new Error("approval required"); e.type = "StripePermissionError"; e.statusCode = 403; e.code = "approval_required"; throw e; });
+  const held = await s.call("POST", u, { clientId: id, invoiceId: inv.id, password: "admin-pass-123" }, A);
+  assert.equal(held.status, 502);
+  assert.match(held.body.error, /holding this refund for approval/);
+  assert.match(held.body.error, /Nothing has been refunded yet/);
+  assert.equal(/write access to Refunds/.test(held.body.error), false, "not the wrong advice");
+
+  // the same 403 without that code is a key that is not allowed to refund at all
+  s.setRefundCreate(async () => { const e = new Error("no"); e.type = "StripePermissionError"; e.statusCode = 403; throw e; });
+  const no = await s.call("POST", u, { clientId: id, invoiceId: inv.id, password: "admin-pass-123" }, A);
+  assert.match(no.body.error, /write access to Refunds/);
+
+  // neither one marks the invoice as refunded
+  const row = (await s.call("GET", `/api/admin/emr/${id}/billing`, undefined, A)).body.invoices.find((x) => x.number === inv.number);
+  assert.equal(row.status, "paid"); assert.equal(row.refunded, 0);
+
+  // once approved in Stripe, the same refund goes through
+  s.setRefundCreate(real);
+  const ok2 = await s.call("POST", u, { clientId: id, invoiceId: inv.id, password: "admin-pass-123" }, A);
+  assert.equal(ok2.status, 200); assert.equal(ok2.body.amount, 4000);
 });
