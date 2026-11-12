@@ -1428,6 +1428,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/presence").mountPresence({ app, store, cfg, ...cl }); // time in app: heartbeats from the member app, minutes per day
   require("./lib/habits").mountHabits({ app, admin, store, ...cl }); // daily activities checklist (extra XP), qualifying days, streak repairs
   require("./lib/custom-workouts").mountCustomWorkouts({ store, activity, ...cl }); // workout builder + member challenges
+  require("./lib/shares").mountShares({ app, store, limiter, me: cl.me, clients: cl.clients, save: cl.save }); // share a saved program or workout by link
   mountAnalytics({ app, admin, store, limiter });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
   admin.get("/email-log", (req, res) => {
