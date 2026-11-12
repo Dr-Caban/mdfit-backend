@@ -353,3 +353,20 @@ test("nothing from the board reaches the logs or the audit ledger", async (t) =>
     for (const secret of [CODE, "135790", "Quokka-private-text", "Numbat-private-reply"]) assert.ok(!raw.includes(secret), `${f}`);
   }
 });
+
+// The key in a shared link is the only thing protecting that note, so the request log must not record it
+test("board: a shared link's key is kept out of the request log", (t) => {
+  const { requestLogger, logger } = require("../lib/logger");
+  const seen = [], real = logger.log;
+  logger.log = (level, msg, fields) => { seen.push(fields); };
+  t.after(() => { logger.log = real; });
+  for (const path of ["/api/board/shared/SECRETKEY123", "/shared/SECRETKEY123", "/api/board"]) {
+    const handlers = {};
+    const res = { statusCode: 200, on: (ev, fn) => { handlers[ev] = fn; }, once: (ev, fn) => { handlers[ev] = fn; } };
+    requestLogger({ method: "GET", path, originalUrl: path, url: path }, res, () => {});
+    (handlers.finish || handlers.close || (() => {}))();
+  }
+  assert.ok(seen.length >= 3, "each request was logged");
+  assert.ok(!JSON.stringify(seen).includes("SECRETKEY123"), "the key is not in the log");
+  assert.ok(seen.some((f) => f && f.path === "/api/board"), "ordinary paths are logged as they are");
+});
