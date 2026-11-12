@@ -78,7 +78,10 @@ function loadConfig() {
       // The same provider names and key variables the owner's other products use, so one set of variables works in both
       const known = {
         moonshot: { url: "https://api.moonshot.ai/v1", key: env("MOONSHOT_API_KEY") },
-        openrouter: { url: "https://openrouter.ai/api/v1", key: env("OPENROUTER_API_KEY") },
+        // "openrouter/free" is OpenRouter's own router across whichever free models it offers at the moment, so a free
+        // model being retired (which is what broke the fallback in the owner's other product) cannot break this one.
+        // OPENROUTER_MODEL names a specific model instead.
+        openrouter: { url: "https://openrouter.ai/api/v1", key: env("OPENROUTER_API_KEY"), model: "openrouter/free" },
         // the same default model the owner's other product uses for this provider
         openai: { url: "https://api.openai.com/v1", key: env("OPENAI_API_KEY"), model: "gpt-4o-mini" }
       };

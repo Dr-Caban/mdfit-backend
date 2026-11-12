@@ -33,9 +33,12 @@ test("AI provider names: moonshot, openrouter and openai each use their own addr
   const chain = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL: "some/model:free", OPENAI_API_KEY: "oa" }, () => settingsFrom(loadConfig()));
   assert.equal(chain.host, "api.moonshot.ai");
   assert.deepEqual(chain.fallbacks.map((f) => [f.host, f.model, f.key]), [["openrouter.ai", "some/model:free", "or"], ["api.openai.com", "gpt-4o-mini", "oa"]]);
-  // keys alone: OpenAI has a default model and is used; OpenRouter has none and is left out until a model is named
+  // keys alone: each backup uses its provider's default. The free one is tried before the paid one.
   const keys = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6", OPENROUTER_API_KEY: "or", OPENAI_API_KEY: "oa" }, () => settingsFrom(loadConfig()));
-  assert.deepEqual(keys.fallbacks.map((f) => [f.host, f.model]), [["api.openai.com", "gpt-4o-mini"]]);
+  assert.deepEqual(keys.fallbacks.map((f) => [f.host, f.model]), [["openrouter.ai", "openrouter/free"], ["api.openai.com", "gpt-4o-mini"]]);
+  // a provider with no key is never a backup
+  const none = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6" }, () => settingsFrom(loadConfig()));
+  assert.deepEqual(none.fallbacks, []);
   const named = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6", OPENAI_API_KEY: "oa", OPENAI_MODEL: "another-model" }, () => settingsFrom(loadConfig()));
   assert.equal(named.fallbacks[0].model, "another-model");
 });
