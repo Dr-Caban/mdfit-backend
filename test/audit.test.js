@@ -16,28 +16,29 @@ test("ledger: hash chain + Ed25519 signatures verify; tampering, deletion and tr
   let v = a.verify();
   assert.equal(v.ok, true); assert.equal(v.entries, 5);
   const months = JSON.parse(JSON.stringify(createStore(dir, { key: "k".repeat(32) }).read("audit-state", {}))).months;
-  assert.deepEqual(months, ["2026-10", "2026-11"], "spans months");
-  assert.ok(!fs.readFileSync(path.join(dir, "audit-2026-11.json"), "utf8").includes("coach@example.com"), "encrypted at rest");
+  assert.deepEqual(months.map((k) => k.slice(0, 7)), ["2026-10", "2026-11"], "spans months: a new month starts a new file");
+  const NOV = "audit-" + months[1];
+  assert.ok(!fs.readFileSync(path.join(dir, NOV + ".json"), "utf8").includes("coach@example.com"), "encrypted at rest");
   // a fresh instance (same store) keeps the same key and chain
   const a2 = createAudit({ store });
   assert.equal(a2.fingerprint, a.fingerprint);
   a2.record({ actor: "client:c1", action: "client./pain", subject: "c1" });
   assert.equal(a2.verify().ok, true);
   // tamper: change who viewed a record
-  const nov = store.read("audit-2026-11", []);
+  const nov = store.read(NOV, []);
   const orig = JSON.parse(JSON.stringify(nov));
-  nov[0].subject = "someone-else"; store.write("audit-2026-11", nov);
+  nov[0].subject = "someone-else"; store.write(NOV, nov);
   v = a2.verify(); assert.equal(v.ok, false); assert.match(v.error, /altered/);
   // tamper with hash too (re-hash without the key): signature fails
-  const { hashOf } = require("../lib/audit"); nov[0].hash = hashOf(nov[0]); store.write("audit-2026-11", nov);
+  const { hashOf } = require("../lib/audit"); nov[0].hash = hashOf(nov[0]); store.write(NOV, nov);
   v = a2.verify(); assert.equal(v.ok, false);
   // delete an entry
-  store.write("audit-2026-11", orig.filter((_, i) => i !== 1));
+  store.write(NOV, orig.filter((_, i) => i !== 1));
   v = a2.verify(); assert.equal(v.ok, false); assert.match(v.error, /missing or out of order/);
   // truncate the newest entry
-  store.write("audit-2026-11", orig.slice(0, -1));
+  store.write(NOV, orig.slice(0, -1));
   v = a2.verify(); assert.equal(v.ok, false); assert.match(v.error, /truncated/);
-  store.write("audit-2026-11", orig);
+  store.write(NOV, orig);
   assert.equal(a2.verify().ok, true, "restored copy verifies again");
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -144,3 +145,43 @@ test("audit anchors detect a fully rebuilt chain; key rotation keeps old entries
   fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dir2, { recursive: true, force: true });
 });
 
+
+test("audit: entries go into small files, the chain runs on from an earlier whole-month file, and nothing about checking it changes", () => {
+  const fs = require("fs"), os = require("os"), path = require("path");
+  const { createStore } = require("../lib/store");
+  const { createAudit } = require("../lib/audit");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-auditseg-"));
+  try {
+    const store = createStore(dir, { key: "made-up-key-for-this-test" });
+    let clock = new Date("2026-10-30T12:00:00Z");
+    const audit = createAudit({ store, ipSalt: "x", now: () => clock });
+    const rec = (n, action = "admin.view /clients") => { for (let i = 0; i < n; i++) audit.record({ actor: "admin", action, subject: "s" + i, ip: "1.2.3.4" }); };
+    rec(3);
+    // make what is there look like the earlier layout: one whole-month file, and a state that knows nothing of small files
+    const st0 = store.read("audit-state"), first = st0.months[0];
+    store.write("audit-2026-10", store.read("audit-" + first)); fs.rmSync(path.join(dir, "audit-" + first + ".json"));
+    store.write("audit-state", { seq: st0.seq, last: st0.last, months: ["2026-10"] });
+    assert.equal(audit.verify().ok, true, "the earlier layout still verifies");
+
+    rec(1200);
+    clock = new Date("2026-11-01T12:00:00Z"); rec(7, "admin.change /settings");
+    const st = store.read("audit-state");
+    assert.equal(st.seq, 1210);
+    assert.equal(st.months[0], "2026-10", "the earlier month file is still the start of the chain");
+    assert.deepEqual(st.months.slice(1).map((k) => store.read("audit-" + k).length), [500, 500, 200, 7], "500 to a file; a new month starts a new file");
+    assert.ok(st.months.slice(1, 4).every((k) => k.startsWith("2026-10-s")) && st.months[4].startsWith("2026-11-s"));
+    assert.equal(store.read("audit-2026-10").length, 3, "the earlier file is not rewritten");
+    const v = audit.verify(); assert.equal(v.ok, true); assert.equal(v.entries, 1210);
+    // reading back: newest first, across files, with the same filters and paging as before
+    const top = audit.list({ limit: 10 }); assert.deepEqual(top.map((e) => e.seq), [1210, 1209, 1208, 1207, 1206, 1205, 1204, 1203, 1202, 1201]);
+    assert.equal(audit.list({ action: "admin.change", limit: 50 }).length, 7);
+    assert.deepEqual(audit.list({ limit: 3, before: 502 }).map((e) => e.seq), [501, 500, 499], "paging crosses from one file into the one before");
+    assert.equal(audit.list({ limit: 5000 }).length, 1210);
+    assert.equal(audit.checkAnchor(2, store.read("audit-2026-10")[1].hash).ok, true); assert.equal(audit.checkAnchor(900, audit.list({ limit: 1, before: 901 })[0].hash).ok, true);
+    // one altered entry in a middle file is still caught, and so is a missing newest file
+    const mid = st.months[2], rows = store.read("audit-" + mid); rows[10].subject = "someone-else"; store.write("audit-" + mid, rows);
+    const bad = audit.verify(); assert.equal(bad.ok, false); assert.match(bad.error, /altered/);
+    rows[10].subject = "s" + (rows[10].seq - 4); store.write("audit-" + mid, rows); assert.equal(audit.verify().ok, true);
+    fs.rmSync(path.join(dir, "audit-" + st.months[4] + ".json")); assert.equal(audit.verify().ok, false, "a file that has gone missing is noticed");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

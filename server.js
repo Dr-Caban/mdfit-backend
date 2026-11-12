@@ -493,7 +493,8 @@ function createApp(cfg = loadConfig()) {
       else if (p === "/api/clients/reset" && ok) { actor = "client"; action = "auth.client.password_reset"; }
       else if (p === "/api/stripe/webhook" && ok) { actor = "stripe"; action = "payments.webhook"; }
       else if (req.admin && ok && !QUIET.has(key)) { actor = `admin:${req.admin}`; action = `admin.${m === "GET" ? "view" : "change"} ${route.replace("/api/admin", "")}`; }
-      else if (req.client && ok && m !== "GET") { actor = `client:${req.client.id}`; action = `client.${route.replace("/api/me", "") || "/"}`; }
+      // (the app's once-a-minute "still open" beat touches no record of care and is not a ledger event: it was most of the ledger)
+      else if (req.client && ok && m !== "GET" && p !== "/api/me/presence") { actor = `client:${req.client.id}`; action = `client.${route.replace("/api/me", "") || "/"}`; }
       if (!action) return;
       audit.record({ actor, action, subject, ip: req.ip, meta: { method: m, status: res.statusCode } });
     });
@@ -1128,8 +1129,11 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || "")) ? String(req.query.from) : nowParts(cfg.tz, cfg.now()).date;
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 42);
     let busy = [], events = null;
-    try { busy = await calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() }); } catch { busy = []; }
-    try { if (calsync.events && calsync.googleOn()) events = await calsync.events(from, addDays(from, days - 1)); } catch (e) { events = null; logger.error("gcal_events_failed", { error: e.message }); }
+    // the two calendar reads go out together, not one after the other
+    [busy, events] = await Promise.all([
+      calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() }).catch(() => []),
+      calsync.events && calsync.googleOn() ? calsync.events(from, addDays(from, days - 1)).catch((e) => { logger.error("gcal_events_failed", { error: e.message }); return null; }) : null
+    ]);
     const appts = appointments().filter((a) => a.status !== "cancelled");
     // the parts of [s, e] not covered by any of the cuts
     const minus = (s, e, cuts) => { let left = [[s, e]]; for (const [cs, ce] of cuts) left = left.flatMap(([a, b]) => (ce <= a || cs >= b ? [[a, b]] : [[a, Math.min(b, cs)], [Math.max(a, ce), b]].filter(([x, y]) => y > x))); return left; };
@@ -1428,6 +1432,17 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const d = store.read("email-log", { days: {}, failures: [] });
     res.json({ enabled: notify.enabled, alertsTo: notify.owners.map(mask), days: Object.entries(d.days).map(([date, v]) => ({ date, ...v })).slice(0, 30), failures: d.failures.slice(0, 20) });
   });
+  // A server that keeps being restarted (run out of memory, most likely) must not start its heaviest background job
+  // again the moment it is back: three starts inside fifteen minutes and the video sync waits for its next turn
+  // (six hours on) or for someone to start it by hand. Seen in production: a large transfer resumed after every
+  // restart and took the server down again each time.
+  if (!cfg.noVideoSync) {
+    try {
+      const now = Date.now(), boots = [...(store.read("boots", []) || []).filter((t) => now - t < 15 * 60e3), now].slice(-10);
+      store.write("boots", boots);
+      if (boots.length >= 3) { cfg.videoSyncHold = true; logger.warn("media sync held", { starts: boots.length, minutes: 15 }); }
+    } catch { /* never let this stop the server starting */ }
+  }
   mountVideos({ app, admin, store, cfg, logger: typeof logger !== "undefined" ? logger : null });
   mountSearch({ app, admin, store, limiter, logger: typeof logger !== "undefined" ? logger : null });
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });
@@ -1497,7 +1512,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/economics").mountEconomics({ app, admin, store, logger, clients: cl.clients, appointments, tiers: pay.tiers, income: pay.income, today: cl.today,
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
-  require("./lib/invoicing").mountInvoicing({ app, admin, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
+  require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
 
   app.use("/api/admin", admin);
 

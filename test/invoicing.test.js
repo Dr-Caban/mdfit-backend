@@ -70,6 +70,13 @@ test("invoice generator: one draft, many people. Clients get it on their chart, 
   assert.equal(sent.some((m) => /workshop, Dec 5|mobility/i.test(m.text)), false, "the email carries the number, the amount and your own words: not what the invoice is for");
   const log = JSON.stringify((await s.call("GET", "/api/admin/audit?action=invoice", undefined, A)).body);
   assert.match(log, /invoice\.generated/); assert.equal(/workshop|gia@|Guest/i.test(log), false, "the ledger holds the invoice number, not what it was or whose");
+  // a client sees their own unpaid invoice in the app (for the bell and its Pay button); nobody else's, and never a guest's
+  const mine = await s.call("GET", "/api/me/invoices", undefined, cal.token);
+  assert.deepEqual(mine.body.invoices.map((x) => [x.number, x.amount, /^\/invoice\?id=[0-9a-f]{32}$/.test(x.path)]), [[c1.number, 4500, true]]);
+  assert.equal((await s.call("GET", "/api/me/invoices")).status, 401);
+  await s.call("POST", `${u}/${c1.id}/status`, { status: "paid", method: "cash" }, A);
+  assert.deepEqual((await s.call("GET", "/api/me/invoices", undefined, cal.token)).body.invoices, [], "once it is paid it is gone from the app");
+  await s.call("POST", `${u}/${c1.id}/status`, { status: "unpaid" }, A);
   // the money screen counts what is owed, chart or not
   assert.deepEqual((await s.call("GET", "/api/admin/economics", undefined, A)).body.owed, { count: 3, total: 13500 });
 });
@@ -115,6 +122,12 @@ test("invoice generator: the link is the key to a page that gives little away, a
 
   const list = (await s.call("GET", u, undefined, A)).body.invoices;
   assert.deepEqual(list.map((x) => [x.number, x.status, x.method]), [[other.number, "unpaid", ""], [c.number, "paid", "card"], [g.number, "paid", "card"]]);
+  // opened inside the app: Stripe comes back through /app-return to the same invoice page
+  const viaApp = await s.call("POST", `/api/invoices/${oid}/pay`, { ui: "app" });
+  assert.equal(viaApp.status, 200);
+  const last = s.made[s.made.length - 1];
+  assert.equal(last.success_url, `https://site.example.com/app-return?to=${encodeURIComponent(`/invoice?id=${oid}&paid=1`)}&session_id={CHECKOUT_SESSION_ID}`);
+  assert.equal(last.cancel_url, `https://site.example.com/app-return?cancel=1&to=${encodeURIComponent(`/invoice?id=${oid}`)}`);
   const mails = await s.mails();
   assert.equal(mails.filter((m) => m.to === "gia@example.com" && /receipt: invoice/i.test(m.subject)).length, 1, "one receipt, however many times Stripe says so");
   assert.equal(mails.filter((m) => m.to === "cal.client@example.com" && /receipt: invoice/i.test(m.subject)).length, 1);
