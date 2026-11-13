@@ -18,7 +18,7 @@ async function model(reply) {
 const quiet = { warn() {} };
 // The parts of an answer most tests look at (suggestions and tokens have their own tests below)
 const core = (o) => (o && o.say ? { say: o.say, places: o.places, area: o.area, model: o.model } : o);
-const NONE = { programs: [], videos: [], tip: "" };
+const NONE = { programs: [], guides: [], videos: [], tip: "" };
 
 test("guide AI: only a service that signs a business associate agreement is ever used", () => {
   assert.equal(hostAllowed("api.openai.com"), true);
@@ -45,7 +45,7 @@ test("guide AI: the sentence goes without the member's name, email or phone, and
   assert.deepEqual(core(out), { say: "I understand, that can be frustrating. Here is where I can take you.", places: ["pain", "book"], area: "knee", model: "small-one" });
   const sent = m.seen[0]; assert.equal(sent.url, "/v1/chat/completions"); assert.equal(sent.auth, "Bearer k_made_up");
   const said = JSON.stringify(sent.body);
-  assert.equal(/Cal|Client|cal@example|555-0100|11\/03\/2026/.test(said), false, "identity removed");
+  assert.equal(/\bCal\b|Client|cal@example|555-0100|11\/03\/2026/.test(said), false, "identity removed"); // (the clinic knowledge for the knee names the calf)
   assert.match(sent.body.messages[1].content, /my knee hurts/);
   assert.equal(sent.body.messages.length, 2); assert.equal(sent.body.max_tokens, 1200);
   assert.match(sent.body.messages[0].content, /never diagnose/); assert.doesNotMatch(sent.body.messages[0].content, /^Reasoning:/); assert.match(sent.body.messages[0].content, /pain \(Pain tool\)/);
@@ -112,5 +112,5 @@ test("guide AI: suggestions are read strictly too: catalog ids only, three progr
   const got = read(JSON.stringify({ say: "Ok.", places: ["pain"], area: "", programs: ["p1", "x", "p1", "p2", "p3", "p4"], videos: ["v5", "v1", "zz", "v2", "v3", "v4"], tip: "**Drink** water  through the day." + " more".repeat(100) }), ["pain"], cat);
   assert.deepEqual(got.programs, ["p1", "p2", "p3"]); assert.deepEqual(got.videos, ["v5", "v1", "v2", "v3"]);
   assert.match(got.tip, /^Drink water through the day\. more/); assert.ok(got.tip.length <= 300);
-  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], videos: [], tip: "" });
+  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "" });
 });

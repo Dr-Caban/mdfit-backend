@@ -1,5 +1,5 @@
 // Refresh lib/exercises.json from the frontend's exercise list (mdfit-frontend/app/exercises.js), which is generated
-// from Dr. Jared's video library. MD Fit Intelligence suggests videos by these ids. Usage: node scripts/sync-exercises.js [path]
+// from Dr. Jared's video library. MD Fit Intelligence suggests videos by these ids. Usage: node scripts/sync-exercises.js [path/to/mdfit-frontend/app/exercises.js] (default: ../mdfit-frontend next to this repo)
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm");
 const src = process.argv[2] || path.join(__dirname, "../../mdfit-frontend/app/exercises.js");

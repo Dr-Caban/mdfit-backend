@@ -297,7 +297,7 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   assert.equal(m.seen.length, 0);
   const ok = await ask(`Hi I'm Zed Quillon, zed.quillon@example.com. ${MARK} my knee hurts`);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", suggested: { programs: [], videos: [], tip: "" },
+  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", suggested: { programs: [], videos: [], guides: [], tip: "" },
     tokens: 1000, unit: "tokens", used: 1000, limit: 50000, left: 49000 }, "the tokens the service says it used");
   assert.equal(m.seen.length, 1); const sent = JSON.stringify(m.seen[0].body);
   assert.equal(/Zed|Quillon|zed\.quillon/.test(sent), false, "the member's name and email did not leave"); assert.match(sent, /my knee hurts/);
