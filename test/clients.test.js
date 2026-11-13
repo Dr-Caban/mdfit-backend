@@ -398,10 +398,11 @@ test("free accounts: unlimited access (ungated); a review changes nothing about 
   assert.equal((await s.call("POST", "/api/me/generations", {}, tok)).body.member, true, "generations always allowed");
 });
 
-test("messaging: open to all, encrypted at rest, unread tracking both ways", async (t) => {
+test("messaging: an Expert Advice member writes to Dr. Jared; encrypted at rest, unread tracking both ways", async (t) => {
   const s = await start(); t.after(s.close);
   const tok = (await signup(s)).body.token;
   const adm = await s.adminToken(), me = (await s.call("GET", "/api/me", undefined, tok)).body.client;
+  assert.equal((await s.call("PUT", `/api/admin/clients/${me.id}/membership`, { tier: "expert" }, adm)).status, 200);
   assert.equal((await s.call("POST", "/api/me/messages", { body: "   " }, tok)).status, 400);
   const m = await s.call("POST", "/api/me/messages", { body: "My left shoulder clicks when I press overhead. Keep going?" }, tok);
   assert.equal(m.status, 201);
