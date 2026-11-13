@@ -477,7 +477,7 @@ function createApp(cfg = loadConfig()) {
   const audit = createAudit({ store, signingKey: cfg.auditSigningKey, ipSalt: cfg.sessionSecret, logger });
   // ---- Staff accounts, roles and permissions (lib/staff.js). The owner is the environment account and is
   // never stored here; everyone else is a record in the "staff" collection with their own permission list.
-  const staff = createStaff({ store, cfg, audit, logger, now: () => cfg.now() });
+  const staff = createStaff({ store, cfg, audit, logger, now: () => (typeof cfg.now === "function" ? cfg.now() : new Date()) });
   const QUIET = new Set(["GET /api/admin/me", "GET /api/admin/messages", "GET /api/admin/calsync", "GET /api/admin/audit"]);
   app.use((req, res, next) => {
     res.on("finish", () => {
