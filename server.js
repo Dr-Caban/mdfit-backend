@@ -83,7 +83,11 @@ function loadConfig() {
         // OPENROUTER_MODEL names a specific model instead.
         openrouter: { url: "https://openrouter.ai/api/v1", key: env("OPENROUTER_API_KEY"), model: "openrouter/free" },
         // the same default model the owner's other product uses for this provider
-        openai: { url: "https://api.openai.com/v1", key: env("OPENAI_API_KEY"), model: "gpt-4o-mini" }
+        openai: { url: "https://api.openai.com/v1", key: env("OPENAI_API_KEY"), model: "gpt-4o-mini" },
+        // Amazon Bedrock through its OpenAI-compatible endpoint, signed with a Bedrock API key. It is covered by the
+        // AWS Business Associate Addendum once that is accepted in AWS Artifact. BEDROCK_REGION picks the region
+        // (us-east-1 if unset); BEDROCK_MODEL names the model, which must be enabled for the account in that region.
+        bedrock: { url: `https://bedrock-runtime.${env("BEDROCK_REGION", "us-east-1")}.amazonaws.com/openai/v1`, key: env("BEDROCK_API_KEY") }
       };
       const first = env("AI_PROVIDER").toLowerCase(), p = known[first] || {};
       // Backups: any other provider that has its key set and a model to use: its own model variable (MOONSHOT_MODEL,
