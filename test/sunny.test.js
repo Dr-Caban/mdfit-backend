@@ -1,4 +1,4 @@
-// Sunny (MD Fit Intelligence): suggestions from the practice's own catalog kept on the member's Home, tokens instead of
+// Sunny: suggestions from the practice's own catalog kept on the member's Home, tokens instead of
 // answers, full access (membership, active treatment plan, in-clinic patient), the Expert Advice tier and who may
 // message Dr. Jared. A stand-in plays the model. Made-up data only.
 const test = require("node:test");
@@ -76,7 +76,7 @@ test("Sunny: suggestions come from the catalog, are kept on Home newest first wi
   assert.equal(r.tokens, 2550); assert.equal(r.used, 2550, "the tokens the service counted");
   // the model was told who it is and what it may suggest
   const sys = m.seen[0].messages[0].content;
-  assert.match(sys, /^Reasoning: low\nYou are Sunny, MD Fit Intelligence/); assert.match(sys, /knee-rehab: Knee Rehab Protocol \[Rehabilitation, beginner\]/);
+  assert.match(sys, /^Reasoning: low\nYou are Sunny, the assistant inside/); assert.match(sys, /knee-rehab: Knee Rehab Protocol \[Rehabilitation, beginner\]/);
   assert.match(sys, /elite-plan: Elite Performance/, "every program, so a locked one can be suggested as a teaser");
   assert.ok(sys.includes(`${V[0]}: ${KV[0].name}`)); assert.match(sys, /never diagnose/); assert.match(sys, /Never invent sets, reps/);
 
@@ -174,7 +174,7 @@ test("Sunny: the in-clinic toggle unlocks every suggested program, 1-on-1 includ
 test("tiers: Expert Advice ($50) is offered by default and added to tiers saved before it existed; 1-on-1 tiers include messaging", async (t) => {
   const d = content.defaultContent().tiers;
   assert.deepEqual(d.map((x) => [x.id, x.price, !!x.directMessages]), [["member", 19.95, false], ["accountability", 29.95, false], ["expert", 50, true], ["premium", 200, true], ["premium-plus", 349, true]]);
-  assert.ok(d.find((x) => x.id === "member").perks.includes("Unlimited Sunny (MD Fit Intelligence)"));
+  assert.ok(d.find((x) => x.id === "member").perks.includes("Unlimited Sunny"));
   assert.ok(d.find((x) => x.id === "expert").perks.includes("Message Dr. Jared directly for expert advice"));
   // saved before Expert Advice existed: added after Accountability; a saved 1-on-1 tier gets messaging
   const old = [{ id: "member", name: "Membership", price: 19.95, meetings: 0, perks: [] }, { id: "accountability", name: "Acc", price: 29.95, meetings: 0, perks: [] }, { id: "vip", name: "VIP", price: 500, meetings: 4, perks: [] }];
