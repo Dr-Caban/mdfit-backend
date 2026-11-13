@@ -44,8 +44,8 @@ test("guide AI: the sentence goes without the member's name, email or phone, and
   const said = JSON.stringify(sent.body);
   assert.equal(/Cal|Client|cal@example|555-0100|11\/03\/2026/.test(said), false, "identity removed");
   assert.match(sent.body.messages[1].content, /my knee hurts/);
-  assert.equal(sent.body.messages.length, 2); assert.equal(sent.body.max_tokens, 300);
-  assert.match(sent.body.messages[0].content, /never diagnose/); assert.match(sent.body.messages[0].content, /pain \(Pain tool\)/);
+  assert.equal(sent.body.messages.length, 2); assert.equal(sent.body.max_tokens, 1200);
+  assert.match(sent.body.messages[0].content, /never diagnose/); assert.doesNotMatch(sent.body.messages[0].content, /^Reasoning:/); assert.match(sent.body.messages[0].content, /pain \(Pain tool\)/);
   assert.deepEqual(Object.keys(sent.body).sort(), ["max_tokens", "messages", "model"]);
 });
 
@@ -89,4 +89,17 @@ test("config: AI_PROVIDER=bedrock points at the region's OpenAI-compatible endpo
     const ai = createGuideAI({ cfg: { scribe: s }, logger: { warn() {} } });
     assert.equal(ai.status().ready, true, "a Bedrock connection may carry members' messages once AI answers are switched on");
   } finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
+});
+
+test("guide AI: a model's written-out thinking is dropped and only the answer is read; gpt-oss is asked to think briefly", async (t) => {
+  const { stripThinking } = require("../lib/scribe");
+  assert.equal(stripThinking('<reasoning>They mention {knee}. Pick pain.</reasoning>{"say":"Ok."}'), '{"say":"Ok."}');
+  assert.equal(stripThinking("<think>hmm {x}</think>\nAnswer"), "Answer");
+  assert.equal(stripThinking("<reasoning>cut off mid {thought"), "", "no answer, nothing to read");
+  assert.equal(stripThinking("Plain answer"), "Plain answer"); assert.equal(stripThinking(null), "");
+  assert.deepEqual(read('<reasoning>Use {"say":"wrong"} maybe</reasoning>{"say":"Here is the pain tool.","places":["pain"],"area":"knee"}', ["pain"]), { say: "Here is the pain tool.", places: ["pain"], area: "knee" });
+  const m = await model(() => ({ content: '<reasoning>knee pain: pain + book</reasoning>{"say":"Sorry your knee hurts. Start here.","places":["pain","book"],"area":"knee"}' })); t.after(m.close);
+  const ai = createGuideAI({ cfg: { scribe: { url: m.url, key: "k_made_up", model: "openai.gpt-oss-120b-1:0" } }, logger: quiet });
+  assert.deepEqual(await ai.understand({ text: "my knee hurts", places: PLACES }), { say: "Sorry your knee hurts. Start here.", places: ["pain", "book"], area: "knee", model: "openai.gpt-oss-120b-1:0" });
+  assert.match(m.seen[0].body.messages[0].content, /^Reasoning: low\n/);
 });
