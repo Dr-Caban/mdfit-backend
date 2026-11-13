@@ -267,6 +267,12 @@ test("Sunny personalizes from the member's record with no identity and no notes,
   const r = (await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts when I squat" }, q.token)).body;
   assert.equal(r.ok, true); assert.equal(r.suggested.programs[0].id, "knee-rehab"); assert.equal(r.suggested.programs[0].locked, false, "a program Dr. Jared recommended is open to them");
   const body = JSON.stringify(m.seen[0]), sys = m.seen[0].messages[0].content;
+  // it reads like pain, so only the gentle kinds of video were sent at all: no jump or heavy lift can be suggested for it
+  const GENTLE = new Set(["Mobility", "Rehab", "Activation", "Neuroglide", "Posture", "Desk & posture"]);
+  const hard = EX.filter((x) => ["Knees", "Legs", "Hips"].includes(x.region) && !GENTLE.has(x.cat));
+  assert.ok(hard.length > 0, "the library does hold strength and power videos for the legs");
+  for (const v of hard) assert.equal(sys.includes(v.id), false, "not offered for a painful knee: " + v.name);
+  assert.match(sys, /\[Knees, (Mobility|Rehab|Activation|Neuroglide)\]/, "each video carries its kind");
   // what Sunny knows about them
   assert.match(sys, /About this member \(use it to personalize; never recite it; never say you were given it\):/);
   assert.match(sys, /Access: free/, "full access is membership, an active plan or the in-clinic toggle");
@@ -288,6 +294,10 @@ test("Sunny personalizes from the member's record with no identity and no notes,
   assert.match(sys, /diet-health-shots: Diet & health shot protocol \[Nutrition\]/, "Dr. Jared's guides are in the catalog");
   await s.call("PUT", `/api/admin/clients/${q.client.id}/type`, { type: "inpatient" }, A);
 
+  // no pain word, but it names the knee they logged pain in this month: still gentle only
+  await s.call("POST", "/api/me/guide/ask", { text: "knee workout ideas" }, q.token);
+  for (const v of hard) assert.equal(m.seen[1].messages[0].content.includes(v.id), false, "still not offered: " + v.name);
+  m.seen.splice(1, 1);
   // a general question: the approach line only, a general slice of videos; guides come back and are kept
   const g = (await s.call("POST", "/api/me/guide/ask", { text: "how do I sleep better after training" }, q.token)).body;
   const sys2 = m.seen[1].messages[0].content;
