@@ -73,6 +73,7 @@ test("invoice generator: one draft, many people. Clients get it on their chart, 
   // a client sees their own unpaid invoice in the app (for the bell and its Pay button); nobody else's, and never a guest's
   const mine = await s.call("GET", "/api/me/invoices", undefined, cal.token);
   assert.deepEqual(mine.body.invoices.map((x) => [x.number, x.amount, /^\/invoice\?id=[0-9a-f]{32}$/.test(x.path)]), [[c1.number, 4500, true]]);
+  assert.equal(typeof mine.body.invoices[0].description, "string"); assert.ok(mine.body.invoices[0].description.length > 0, "the signed-in member is told what their own invoice is for (Sunny says it on the device)");
   assert.equal((await s.call("GET", "/api/me/invoices")).status, 401);
   await s.call("POST", `${u}/${c1.id}/status`, { status: "paid", method: "cash" }, A);
   assert.deepEqual((await s.call("GET", "/api/me/invoices", undefined, cal.token)).body.invoices, [], "once it is paid it is gone from the app");
