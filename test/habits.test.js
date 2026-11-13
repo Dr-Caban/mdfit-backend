@@ -52,7 +52,8 @@ test("owner's activity list: exact XP, once a day, undo the same day, feeds life
   assert.deepEqual(first.goalLevels, { novice: 30, amateur: 50, advanced: 75, elite: 100 });
   // Owner's rule: 5 XP, or 10 for the demanding ones
   const want = { sunlight: 5, acupressure: 10, "foam-rolling": 10, "ice-bath": 10, "health-shot": 5, prayer: 5, meditation: 5, grounding: 5, "box-breathing": 5,
-    walk: 5, sauna: 5, stretching: 5, yoga: 10, "no-screens": 10, massage: 5, journaling: 5, "red-light": 5, "active-recreation": 10, "challenge-send": 5, "challenge-do": 10 };
+    walk: 5, sauna: 5, stretching: 5, yoga: 10, "no-screens": 10, massage: 5, journaling: 5, "red-light": 5, "active-recreation": 10, "workout-outside": 25,
+    "challenge-send": 5, "challenge-do": 10 };
   assert.deepEqual(Object.fromEntries(first.habits.map((h) => [h.id, h.points])), want);
   assert.ok(first.habits.every((h) => h.how.length > 5), "every activity has a how line");
   assert.match(first.habits.find((h) => h.id === "sunlight").how, /20 minutes/);
@@ -98,7 +99,7 @@ test("admins edit the list; past checks keep the XP they were earned with", asyn
   const at = await s.adminToken();
   assert.equal((await s.call("GET", "/api/admin/habits", undefined, tok)).status, 401);
   const cfg = (await s.call("GET", "/api/admin/habits", undefined, at)).body;
-  assert.equal(cfg.habits.length, 20); assert.equal(cfg.dailyGoal, 50);
+  assert.equal(cfg.habits.length, 21); assert.equal(cfg.dailyGoal, 50);
   const habits = cfg.habits.map((h) => (h.id === "prayer" ? { ...h, points: 25 } : h.id === "challenge-do" ? { ...h, points: 99 } : h));
   let r = await s.call("PUT", "/api/admin/habits", { habits: [...habits, { id: "sleep", name: "Sleep 8 hours", points: 10, how: "In bed by 10." }], dailyGoal: 40 }, at);
   assert.equal(r.status, 200);
@@ -231,4 +232,64 @@ test("goal levels: a member who chose under the old names keeps the same daily n
   assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "novice" }, tok)).body.goal, 30);
   const r = (await goalDay(s, tok)).body;
   assert.equal(r.total, 50); assert.equal(r.qualifying, true);
+});
+
+// ---- "Workout outside of app": the 19th activity a member can tick (owner, Nov 2026) ----
+
+test("workout outside the app is a 25-point activity a member can tick", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: tok } = await signup(s);
+
+  const list = (await today(s, tok)).body.habits;
+  const h = list.find((a) => a.id === "workout-outside");
+  assert.ok(h, "the activity is in the list members see");
+  assert.equal(h.name, "Workout outside of app");
+  assert.equal(h.points, 25);
+  assert.equal(h.auto, false, "ticked by hand, not earned automatically");
+  assert.ok(h.how.length > 5, "it has a how line like every other activity");
+  assert.equal(list.filter((a) => !a.auto).length, 19, "nineteen activities a member ticks");
+
+  const r = await check(s, tok, "workout-outside");
+  assert.equal(r.status, 201);
+  assert.equal(r.body.points, 25, "the day's activity points");
+  assert.equal(r.body.habits.find((a) => a.id === "workout-outside").earned, 25);
+  // once a day, like every other activity
+  assert.equal((await check(s, tok, "workout-outside")).status, 409);
+  assert.equal((await today(s, tok)).body.points, 25);
+  // and it can be undone the same day
+  assert.equal((await s.call("DELETE", "/api/me/habits/checkin/workout-outside", undefined, tok)).status, 200);
+  assert.equal((await today(s, tok)).body.points, 0);
+});
+
+test("it does not change what makes a day qualify, for anyone", async (t) => {
+  const s = await start(); t.after(s.close);
+  const { token: tok } = await signup(s);
+  // Amateur is 50 a day, so 25 on its own is half the goal: no streak change for any member
+  await check(s, tok, "workout-outside");
+  const d = (await today(s, tok)).body;
+  assert.equal(d.goal, 50);
+  assert.equal(d.total, 25);
+  assert.equal(d.qualifying, false, "a 25-point activity alone does not hold a streak");
+  assert.equal(d.remaining, 25);
+});
+
+test("the new activity reaches a practice that had already saved its own list", () => {
+  // A saved list replaces DEFAULT_HABITS entirely, so without the migration the practice's members would never
+  // see an activity added to the defaults later.
+  const saved = {
+    version: 2, pointsRevision: 3,
+    habits: H.DEFAULT_HABITS.filter((x) => x.id !== "workout-outside").map((x) => ({ ...x })),
+    dailyGoal: 50
+  };
+  const cfg = H.configFrom(saved);
+  const ids = cfg.habits.map((h) => h.id);
+  assert.ok(ids.includes("workout-outside"), "it was added to the saved list");
+  assert.equal(cfg.habits.find((h) => h.id === "workout-outside").points, 25);
+  // it sits with the activities members tick, above the two automatic ones
+  assert.ok(ids.indexOf("workout-outside") < ids.indexOf("challenge-send"));
+  assert.equal(cfg.dailyGoal, 50, "the practice's own daily goal is untouched");
+
+  // once saved at this revision, an activity the practice deleted on purpose stays deleted
+  const after = H.configFrom({ ...saved, habitsRevision: 1 });
+  assert.equal(after.habits.some((h) => h.id === "workout-outside"), false, "not resurrected");
 });
