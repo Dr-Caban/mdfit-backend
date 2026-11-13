@@ -68,3 +68,25 @@ test("guide AI: the reply is read strictly", () => {
   assert.equal(read("[1,2]", ["a"]), null); assert.equal(read("", ["a"]), null); assert.equal(read('{"places":["a"]}', ["a"]), null);
   assert.deepEqual(read('{"say":" Hi  there ","places":["a","a","b","c","d","e","zz"],"area":"BACK"}', ["a", "b", "c", "d", "e"]), { say: "Hi there", places: ["a", "b", "c", "d"], area: "back" });
 });
+
+test("guide AI: Amazon Bedrock's OpenAI-compatible endpoint is accepted in every region, and look-alikes are not", () => {
+  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.us-east-2.amazonaws.com", "bedrock-runtime.us-west-2.amazonaws.com", "bedrock-runtime.eu-central-1.amazonaws.com"]) assert.equal(hostAllowed(h), true, h);
+  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com.evil.example", "evil-bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.amazonaws.com", "bedrock.us-east-1.amazonaws.com", "bedrock-runtime.us-east-1.amazonaws.co"]) assert.equal(hostAllowed(h), false, h);
+});
+
+test("config: AI_PROVIDER=bedrock points at the region's OpenAI-compatible endpoint with the Bedrock key and model", () => {
+  const { loadConfig } = require("../server");
+  const keep = { ...process.env };
+  try {
+    for (const k of Object.keys(process.env)) if (/^(AI_|SCRIBE_|BEDROCK_|OPENAI_|OPENROUTER_|MOONSHOT_)/.test(k)) delete process.env[k];
+    Object.assign(process.env, { AI_PROVIDER: "bedrock", BEDROCK_API_KEY: "bedrock-key-not-real", BEDROCK_MODEL: "made-up.model-v1" });
+    let s = loadConfig().scribe;
+    assert.equal(s.url, "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1");
+    assert.equal(s.key, "bedrock-key-not-real"); assert.equal(s.model, "made-up.model-v1");
+    process.env.BEDROCK_REGION = "us-east-2";
+    s = loadConfig().scribe;
+    assert.equal(s.url, "https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1");
+    const ai = createGuideAI({ cfg: { scribe: s }, logger: { warn() {} } });
+    assert.equal(ai.status().ready, true, "a Bedrock connection may carry members' messages once AI answers are switched on");
+  } finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
+});
