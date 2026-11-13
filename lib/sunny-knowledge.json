@@ -1,0 +1,699 @@
+{
+ "_note": "Built by scripts/sync-sunny-knowledge.js from mdfit-frontend painmuscles.js (the pain tool's referral map) and paintracks.js (Dr. Jared's pain-relief tracks). Do not edit by hand.",
+ "approach": "Dr. Jared's approach: assess, release, correct, assign homework, strengthen. The source of pain is often not where it hurts: a muscle somewhere else commonly refers pain to that spot, so the pain tool checks the usual sources.",
+ "areas": {
+  "knee": {
+   "spots": [
+    {
+     "spot": "Kneecap or just below",
+     "muscles": [
+      "Rectus femoris",
+      "Vastus medialis",
+      "Vastus lateralis",
+      "Vastus intermedius"
+     ]
+    },
+    {
+     "spot": "Inside of the knee",
+     "muscles": [
+      "Vastus medialis",
+      "Adductor longus & brevis",
+      "Semitendinosus & semimembranosus",
+      "Gracilis"
+     ]
+    },
+    {
+     "spot": "Outside of the knee",
+     "muscles": [
+      "Vastus lateralis",
+      "Tensor fasciae latae",
+      "Biceps femoris"
+     ]
+    },
+    {
+     "spot": "Front of the shin",
+     "muscles": [
+      "Tibialis anterior",
+      "Adductor longus & brevis",
+      "Rectus femoris"
+     ]
+    },
+    {
+     "spot": "Back of the knee",
+     "muscles": [
+      "Gastrocnemius",
+      "Popliteus",
+      "Biceps femoris",
+      "Semitendinosus & semimembranosus"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "knee",
+     "title": "Knee → referred knee pain"
+    },
+    {
+     "id": "glute-min",
+     "title": "Gluteus minimus → side of hip & SI region"
+    },
+    {
+     "id": "calf-soleus",
+     "title": "Calf / soleus → calf, heel & plantar complex"
+    },
+    {
+     "id": "foot",
+     "title": "Foot → sole, heel & arch"
+    },
+    {
+     "id": "groin-rotational",
+     "title": "Groin → adductor / rotational referral"
+    }
+   ]
+  },
+  "back": {
+   "spots": [
+    {
+     "spot": "Across the low back",
+     "muscles": [
+      "Quadratus lumborum",
+      "Iliocostalis",
+      "Gluteus medius",
+      "Psoas"
+     ]
+    },
+    {
+     "spot": "Right beside the spine",
+     "muscles": [
+      "Multifidus",
+      "Psoas",
+      "Longissimus",
+      "Spinalis"
+     ]
+    },
+    {
+     "spot": "Flank or side",
+     "muscles": [
+      "Quadratus lumborum",
+      "Iliocostalis",
+      "Serratus posterior inferior"
+     ]
+    },
+    {
+     "spot": "SI joint / back of pelvis",
+     "muscles": [
+      "Quadratus lumborum",
+      "Longissimus",
+      "Gluteus medius",
+      "Iliacus"
+     ]
+    },
+    {
+     "spot": "Tailbone",
+     "muscles": [
+      "Multifidus",
+      "Gluteus maximus"
+     ]
+    },
+    {
+     "spot": "Between the shoulder blades",
+     "muscles": [
+      "Scalenes",
+      "Rhomboid major",
+      "Middle trapezius",
+      "Levator scapulae"
+     ]
+    },
+    {
+     "spot": "Inner edge of the shoulder blade",
+     "muscles": [
+      "Levator scapulae",
+      "Rhomboid minor",
+      "Lower trapezius",
+      "Middle trapezius"
+     ]
+    },
+    {
+     "spot": "Bottom tip of the shoulder blade",
+     "muscles": [
+      "Latissimus dorsi",
+      "Serratus anterior",
+      "Iliocostalis"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "infraspinatus",
+     "title": "Infraspinatus → back & deep front of the shoulder"
+    },
+    {
+     "id": "levator",
+     "title": "Levator scapulae → upper shoulder blade"
+    },
+    {
+     "id": "scalenes",
+     "title": "Scalenes → neck, shoulder blade & deltoid"
+    },
+    {
+     "id": "serratus",
+     "title": "Serratus anterior → side ribs & shoulder blade"
+    },
+    {
+     "id": "supraspinatus",
+     "title": "Supraspinatus → top & outside of the shoulder"
+    }
+   ]
+  },
+  "shoulder": {
+   "spots": [
+    {
+     "spot": "Top of the shoulder",
+     "muscles": [
+      "Supraspinatus",
+      "Upper trapezius",
+      "Lateral deltoid",
+      "Levator scapulae"
+     ]
+    },
+    {
+     "spot": "Front of the shoulder",
+     "muscles": [
+      "Infraspinatus",
+      "Anterior deltoid",
+      "Biceps, long head",
+      "Pectoralis major, upper (clavicular) head"
+     ]
+    },
+    {
+     "spot": "Outside of the shoulder or arm",
+     "muscles": [
+      "Lateral deltoid",
+      "Supraspinatus",
+      "Infraspinatus",
+      "Scalenes"
+     ]
+    },
+    {
+     "spot": "Deep inside the joint",
+     "muscles": [
+      "Infraspinatus",
+      "Supraspinatus",
+      "Subscapularis",
+      "Biceps, long head"
+     ]
+    },
+    {
+     "spot": "Under the collarbone",
+     "muscles": [
+      "Subclavius",
+      "Pectoralis major, upper (clavicular) head",
+      "Scalenes",
+      "Sternocleidomastoid"
+     ]
+    },
+    {
+     "spot": "Back of the shoulder",
+     "muscles": [
+      "Posterior deltoid",
+      "Teres minor",
+      "Subscapularis",
+      "Teres major"
+     ]
+    },
+    {
+     "spot": "On the shoulder blade",
+     "muscles": [
+      "Infraspinatus",
+      "Middle trapezius",
+      "Supraspinatus",
+      "Lower trapezius"
+     ]
+    },
+    {
+     "spot": "Back of the upper arm",
+     "muscles": [
+      "Triceps, long head",
+      "Triceps, lateral head",
+      "Teres major",
+      "Subscapularis"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "scalenes",
+     "title": "Scalenes → neck, shoulder blade & deltoid"
+    },
+    {
+     "id": "supraspinatus",
+     "title": "Supraspinatus → top & outside of the shoulder"
+    },
+    {
+     "id": "infraspinatus",
+     "title": "Infraspinatus → back & deep front of the shoulder"
+    },
+    {
+     "id": "subscapularis",
+     "title": "Subscapularis → front of shoulder & deep cuff"
+    },
+    {
+     "id": "levator",
+     "title": "Levator scapulae → upper shoulder blade"
+    }
+   ]
+  },
+  "hip": {
+   "spots": [
+    {
+     "spot": "Groin",
+     "muscles": [
+      "Iliacus",
+      "Adductor longus & brevis",
+      "Adductor magnus",
+      "Psoas"
+     ]
+    },
+    {
+     "spot": "Front of the hip bone",
+     "muscles": [
+      "Rectus femoris",
+      "Iliacus",
+      "Tensor fasciae latae",
+      "Sartorius"
+     ]
+    },
+    {
+     "spot": "Outside of the hip",
+     "muscles": [
+      "Tensor fasciae latae",
+      "Gluteus minimus",
+      "Gluteus medius",
+      "Quadratus lumborum"
+     ]
+    },
+    {
+     "spot": "Middle of the buttock",
+     "muscles": [
+      "Piriformis",
+      "Gluteus minimus",
+      "Gluteus medius",
+      "Longissimus"
+     ]
+    },
+    {
+     "spot": "Upper buttock, belt line",
+     "muscles": [
+      "Gluteus medius",
+      "Quadratus lumborum",
+      "Iliacus",
+      "Iliocostalis"
+     ]
+    },
+    {
+     "spot": "Outer hip",
+     "muscles": [
+      "Gluteus minimus",
+      "Gluteus medius",
+      "Tensor fasciae latae"
+     ]
+    },
+    {
+     "spot": "Pain down the leg (sciatica-like)",
+     "muscles": [
+      "Gluteus minimus",
+      "Piriformis",
+      "Quadratus lumborum"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "iliacus",
+     "title": "Iliacus → front of hip & pelvis"
+    },
+    {
+     "id": "psoas",
+     "title": "Psoas → front of hip & deep low back"
+    },
+    {
+     "id": "groin-rotational",
+     "title": "Groin → adductor / rotational referral"
+    },
+    {
+     "id": "pectineus",
+     "title": "Pectineus → front of groin & upper inner thigh"
+    },
+    {
+     "id": "glute-min",
+     "title": "Gluteus minimus → side of hip & SI region"
+    }
+   ]
+  },
+  "neck": {
+   "spots": [
+    {
+     "spot": "Side of the neck",
+     "muscles": [
+      "Scalenes",
+      "Levator scapulae",
+      "Sternocleidomastoid",
+      "Upper trapezius"
+     ]
+    },
+    {
+     "spot": "Front of the neck",
+     "muscles": [
+      "Sternocleidomastoid",
+      "Scalenes",
+      "Longus colli",
+      "Digastric"
+     ]
+    },
+    {
+     "spot": "Where neck meets shoulder",
+     "muscles": [
+      "Levator scapulae",
+      "Upper trapezius",
+      "Scalenes",
+      "Lower trapezius"
+     ]
+    },
+    {
+     "spot": "Back of the neck",
+     "muscles": [
+      "Suboccipitals",
+      "Splenius capitis & cervicis",
+      "Levator scapulae",
+      "Upper trapezius"
+     ]
+    },
+    {
+     "spot": "Top of the shoulder",
+     "muscles": [
+      "Upper trapezius",
+      "Levator scapulae",
+      "Supraspinatus",
+      "Middle trapezius"
+     ]
+    },
+    {
+     "spot": "Can't turn my head",
+     "muscles": [
+      "Levator scapulae",
+      "Sternocleidomastoid",
+      "Splenius capitis & cervicis"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "scalenes",
+     "title": "Scalenes → neck, shoulder blade & deltoid"
+    },
+    {
+     "id": "levator",
+     "title": "Levator scapulae → upper shoulder blade"
+    },
+    {
+     "id": "infraspinatus",
+     "title": "Infraspinatus → back & deep front of the shoulder"
+    },
+    {
+     "id": "supraspinatus",
+     "title": "Supraspinatus → top & outside of the shoulder"
+    },
+    {
+     "id": "subscapularis",
+     "title": "Subscapularis → front of shoulder & deep cuff"
+    }
+   ]
+  },
+  "ankle": {
+   "spots": [
+    {
+     "spot": "Inner ankle and arch",
+     "muscles": [
+      "Tibialis posterior",
+      "Soleus",
+      "Foot muscles",
+      "Gastrocnemius"
+     ]
+    },
+    {
+     "spot": "Outer ankle",
+     "muscles": [
+      "Peroneals",
+      "Gluteus minimus"
+     ]
+    },
+    {
+     "spot": "Front of the ankle or big toe",
+     "muscles": [
+      "Tibialis anterior",
+      "Extensor hallucis longus",
+      "Extensor digitorum longus"
+     ]
+    },
+    {
+     "spot": "Sole of the foot",
+     "muscles": [
+      "Foot muscles",
+      "Gastrocnemius",
+      "Soleus",
+      "Tibialis posterior"
+     ]
+    },
+    {
+     "spot": "Achilles tendon",
+     "muscles": [
+      "Soleus",
+      "Tibialis posterior",
+      "Gastrocnemius"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "calf-soleus",
+     "title": "Calf / soleus → calf, heel & plantar complex"
+    },
+    {
+     "id": "foot",
+     "title": "Foot → sole, heel & arch"
+    },
+    {
+     "id": "glute-min",
+     "title": "Gluteus minimus → side of hip & SI region"
+    },
+    {
+     "id": "knee",
+     "title": "Knee → referred knee pain"
+    }
+   ]
+  },
+  "foot": {
+   "spots": [
+    {
+     "spot": "Achilles tendon",
+     "muscles": [
+      "Soleus",
+      "Tibialis posterior",
+      "Gastrocnemius"
+     ]
+    },
+    {
+     "spot": "Bottom of the heel",
+     "muscles": [
+      "Soleus",
+      "Foot muscles"
+     ]
+    },
+    {
+     "spot": "Arch",
+     "muscles": [
+      "Tibialis posterior",
+      "Gastrocnemius",
+      "Foot muscles"
+     ]
+    },
+    {
+     "spot": "Sole of the foot",
+     "muscles": [
+      "Foot muscles",
+      "Gastrocnemius",
+      "Soleus",
+      "Tibialis posterior"
+     ]
+    },
+    {
+     "spot": "Inner ankle and arch",
+     "muscles": [
+      "Tibialis posterior",
+      "Soleus",
+      "Foot muscles",
+      "Gastrocnemius"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "calf-soleus",
+     "title": "Calf / soleus → calf, heel & plantar complex"
+    },
+    {
+     "id": "foot",
+     "title": "Foot → sole, heel & arch"
+    },
+    {
+     "id": "glute-min",
+     "title": "Gluteus minimus → side of hip & SI region"
+    },
+    {
+     "id": "knee",
+     "title": "Knee → referred knee pain"
+    }
+   ]
+  },
+  "elbow": {
+   "spots": [
+    {
+     "spot": "Outside of the elbow",
+     "muscles": [
+      "Wrist extensors",
+      "Supinator",
+      "Brachioradialis",
+      "Triceps, lateral head"
+     ]
+    },
+    {
+     "spot": "Inside of the elbow",
+     "muscles": [
+      "Wrist flexors",
+      "Triceps, medial head",
+      "Pectoralis major, lower (sternal) head",
+      "Finger flexors"
+     ]
+    },
+    {
+     "spot": "Point of the elbow",
+     "muscles": [
+      "Triceps, medial head",
+      "Triceps, long head"
+     ]
+    },
+    {
+     "spot": "Front of the elbow",
+     "muscles": [
+      "Biceps, long head",
+      "Biceps, short head",
+      "Brachioradialis",
+      "Brachialis"
+     ]
+    },
+    {
+     "spot": "Forearm",
+     "muscles": [
+      "Finger extensors",
+      "Wrist extensors",
+      "Wrist flexors",
+      "Scalenes"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "scalenes",
+     "title": "Scalenes → neck, shoulder blade & deltoid"
+    },
+    {
+     "id": "triceps",
+     "title": "Triceps → back of the arm"
+    },
+    {
+     "id": "subscapularis",
+     "title": "Subscapularis → front of shoulder & deep cuff"
+    },
+    {
+     "id": "pec-major",
+     "title": "Pec major → chest & front of shoulder"
+    },
+    {
+     "id": "supraspinatus",
+     "title": "Supraspinatus → top & outside of the shoulder"
+    }
+   ]
+  },
+  "wrist": {
+   "spots": [
+    {
+     "spot": "Back of the hand or wrist",
+     "muscles": [
+      "Wrist extensors",
+      "Finger extensors",
+      "Scalenes",
+      "Subscapularis"
+     ]
+    },
+    {
+     "spot": "Palm side",
+     "muscles": [
+      "Wrist flexors",
+      "Finger flexors",
+      "Pectoralis minor",
+      "Latissimus dorsi"
+     ]
+    },
+    {
+     "spot": "Thumb and index finger",
+     "muscles": [
+      "Scalenes",
+      "Brachioradialis",
+      "Supinator",
+      "Subclavius"
+     ]
+    },
+    {
+     "spot": "Ring and little finger",
+     "muscles": [
+      "Pectoralis minor",
+      "Pectoralis major, lower (sternal) head",
+      "Latissimus dorsi",
+      "Subscapularis"
+     ]
+    },
+    {
+     "spot": "Tingling or numbness",
+     "muscles": [
+      "Scalenes",
+      "Pectoralis minor",
+      "Subscapularis",
+      "Subclavius"
+     ]
+    }
+   ],
+   "tracks": [
+    {
+     "id": "radialis-general",
+     "title": "General radialis (brachioradialis) → forearm & thumb side"
+    },
+    {
+     "id": "extensor-radialis",
+     "title": "Extensor carpi radialis → outer forearm & elbow"
+    },
+    {
+     "id": "scalenes",
+     "title": "Scalenes → neck, shoulder blade & deltoid"
+    },
+    {
+     "id": "triceps",
+     "title": "Triceps → back of the arm"
+    },
+    {
+     "id": "medial-forearm",
+     "title": "Pronator / medial forearm → inner forearm & elbow"
+    }
+   ]
+  }
+ }
+}

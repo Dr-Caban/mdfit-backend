@@ -234,7 +234,7 @@ test("accountability membership: $1 off per active day, 20 days takes $29.95 dow
   assert.equal((await s.call("GET", "/api/me/accountability", undefined, a.token)).body.enabled, false);
   // the default lineup the app shows
   const tiers = (await s.call("GET", "/api/content")).body.tiers;
-  assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 19.95, 0], ["accountability", 29.95, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
+  assert.deepEqual(tiers.map((x) => [x.id, x.price, x.meetings || 0]), [["member", 19.95, 0], ["accountability", 29.95, 0], ["expert", 50, 0], ["premium", 200, 2], ["premium-plus", 349, 4]]);
 });
 
 test("admin sees each client's activity: the 30-day count in the list and a day-by-day series on the profile", async (t) => {

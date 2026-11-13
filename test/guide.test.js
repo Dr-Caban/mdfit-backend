@@ -16,7 +16,7 @@ logger.level = 99;
 // A stand-in for the language model: records what it was sent, answers what the test tells it to
 async function model(reply) {
   const seen = [];
-  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ url: req.url, body: JSON.parse(b) }); const r = reply(seen.length); res.writeHead(r.status || 200, { "content-type": "application/json" }); res.end(JSON.stringify(r.status && r.status !== 200 ? { error: { message: "no" } } : { choices: [{ message: { content: r.content } }] })); }); }).listen(0);
+  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { seen.push({ url: req.url, body: JSON.parse(b) }); const r = reply(seen.length); res.writeHead(r.status || 200, { "content-type": "application/json" }); res.end(JSON.stringify(r.status && r.status !== 200 ? { error: { message: "no" } } : { choices: [{ message: { content: r.content } }], usage: { total_tokens: r.tokens ?? 1000 } })); }); }).listen(0);
   await new Promise((r) => srv.once("listening", r));
   return { seen, host: `127.0.0.1:${srv.address().port}`, url: `http://127.0.0.1:${srv.address().port}/v1`, close: () => { srv.closeAllConnections(); srv.close(); } };
 }
@@ -39,40 +39,45 @@ async function start(extra = {}) {
   return { app, call, adminToken, signup, at, answer, everything, file, dataDir, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
-test("guide: a free account gets 25 answers a day by default, then is told the limit; the owner can change the number", async (t) => {
+test("guide: a free account gets 50,000 tokens a day by default; an answer on the device costs 300; then the limit; the owner can change it", async (t) => {
   const s = await start(); t.after(s.close);
   const A = await s.adminToken(), fay = await s.signup("Fay Free");
 
   let g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body;
-  assert.deepEqual({ plan: g.plan, limit: g.limit, used: g.used, left: g.left }, { plan: "free", limit: 25, used: 0, left: 25 }, "the default is 25");
+  assert.deepEqual({ plan: g.plan, unit: g.unit, limit: g.limit, used: g.used, left: g.left }, { plan: "free", unit: "tokens", limit: 50000, used: 0, left: 50000 }, "the default is 50,000 tokens");
   assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable" });
-  assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freePerDay, 25);
+  assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freeTokensPerDay, 50000);
+  assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 300, limit: 50000, left: 49700 });
 
-  for (let i = 1; i <= 25; i++) { const r = await s.answer(fay.token); assert.equal(r.status, 200); assert.deepEqual(r.body, { ok: true, used: i, limit: 25, left: 25 - i }); }
-  const over = await s.answer(fay.token);
-  assert.equal(over.status, 200, "the limit is an answer, not an error"); assert.deepEqual(over.body, { ok: false, limited: true, used: 25, limit: 25, left: 0 });
-  assert.deepEqual((await s.answer(fay.token)).body, { ok: false, limited: true, used: 25, limit: 25, left: 0 });
-  g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body; assert.equal(g.used, 25); assert.equal(g.left, 0);
-
-  // the owner's setting: a whole number from 1 to 500, kept in the store, applied at once
-  for (const bad of [0, 501, 2.5, "5", null, -3]) assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freePerDay: bad }, A)).status, 400, String(bad));
+  // the owner's setting: a whole number of tokens from 1,000 to 1,000,000, kept in the store, applied at once
+  for (const bad of [999, 1000001, 2500.5, "5000", null, -3]) {
+    const r = await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: bad }, A);
+    assert.equal(r.status, 400, String(bad)); assert.equal(r.body.error, "Free tokens a day must be a whole number from 1,000 to 1,000,000.");
+  }
+  const old = await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 25 }, A);
+  assert.equal(old.status, 400, "the old answer count is not accepted"); assert.match(old.body.error, /Free tokens a day/);
   assert.equal((await s.call("PUT", "/api/admin/guide/settings", {}, A)).status, 400);
-  assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 500 }, A)).body.settings.freePerDay, 500);
-  assert.deepEqual((await s.answer(fay.token)).body, { ok: true, used: 26, limit: 500, left: 474 }, "a higher limit opens the day back up");
-  assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 3 }, A)).body.settings.freePerDay, 3);
-  assert.equal(s.file("guide").settings.freePerDay, 3);
+  assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A)).body.settings.freeTokensPerDay, 1000);
+  assert.equal(s.file("guide").settings.freeTokensPerDay, 1000); assert.equal("freePerDay" in s.file("guide").settings, false);
+  for (const left of [400, 100, 0]) assert.equal((await s.answer(fay.token)).body.left, left);
+  const over = await s.answer(fay.token);
+  assert.equal(over.status, 200, "the limit is an answer, not an error"); assert.deepEqual(over.body, { ok: false, limited: true, used: 1200, limit: 1000, left: 0, unit: "tokens" });
+  assert.deepEqual((await s.answer(fay.token)).body, { ok: false, limited: true, used: 1200, limit: 1000, left: 0, unit: "tokens" });
+  g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body; assert.equal(g.used, 1200); assert.equal(g.left, 0);
+  assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000000 }, A)).body.settings.freeTokensPerDay, 1000000);
+  assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 1500, limit: 1000000, left: 998500 }, "a higher limit opens the day back up");
+  await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
   const gus = await s.signup("Gus Guest");
-  for (let i = 1; i <= 3; i++) assert.equal((await s.answer(gus.token)).body.left, 3 - i);
+  for (const left of [700, 400, 100, 0]) assert.equal((await s.answer(gus.token)).body.left, left);
   assert.equal((await s.answer(gus.token)).body.limited, true);
   assert.equal((await s.answer(fay.token)).body.limited, true, "a lower limit applies to someone already past it");
-  assert.equal((await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 1 }, A)).status, 200);
 });
 
 test("guide: the count belongs to the clinic's day and to the account, not the device; a member is unlimited", async (t) => {
   const s = await start(); t.after(s.close);
   const A = await s.adminToken(), fay = await s.signup("Fay Free"), mel = await s.signup("Mel Member");
-  await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 2 }, A);
-  await s.answer(fay.token); await s.answer(fay.token);
+  await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
+  for (let i = 0; i < 4; i++) await s.answer(fay.token); // 300 tokens each: 1,200 is past 1,000
   assert.equal((await s.answer(fay.token)).body.limited, true);
   // signing in again (a new phone, a reinstall) is the same account and the same count
   const again = (await s.call("POST", "/api/clients/login", { email: "fay.free@example.com", password: "made-up-pass-1" })).body;
@@ -82,14 +87,14 @@ test("guide: the count belongs to the clinic's day and to the account, not the d
   s.at("2026-11-13T03:00:00Z"); assert.equal((await s.answer(fay.token)).body.limited, true);
   // half past midnight at the clinic: a new day
   s.at("2026-11-13T05:30:00Z");
-  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, fay.token)).body.left, 2);
-  assert.deepEqual((await s.answer(fay.token)).body, { ok: true, used: 1, limit: 2, left: 1 });
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, fay.token)).body.left, 1000);
+  assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 300, limit: 1000, left: 700 });
 
   // a paid membership (the same rule the rest of the app uses) has no limit
   assert.equal((await s.call("PUT", `/api/admin/clients/${mel.client.id}/membership`, { tier: "member" }, A)).status, 200);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.plan, "member");
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.left, null);
-  for (let i = 1; i <= 6; i++) assert.deepEqual((await s.answer(mel.token)).body, { ok: true, used: i, limit: 2, left: null });
+  for (let i = 1; i <= 6; i++) assert.deepEqual((await s.answer(mel.token)).body, { ok: true, unit: "tokens", used: 300 * i, limit: 1000, left: null });
   // and when it ends, the limit is back
   await s.call("PUT", `/api/admin/clients/${mel.client.id}/membership`, { tier: "member", until: "2026-11-12" }, A);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.plan, "free");
@@ -187,15 +192,15 @@ test("guide: the owner's numbers add up, day by day, and count who upgraded afte
   const s = await start(); t.after(s.close);
   const A = await s.adminToken(), u = "/api/admin/guide/stats";
   const ann = await s.signup("Ann Upgrader"), bob = await s.signup("Bob Stays"), cy = await s.signup("Cy Member"), dee = await s.signup("Dee Looks");
-  await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 2 }, A);
+  await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
   const ev = (tok, type) => s.call("POST", "/api/me/guide/event", { type }, tok);
   const empty = (await s.call("GET", u, undefined, A)).body;
-  assert.deepEqual(empty.totals, { opens: 0, people: 0, answers: 0, limitHits: 0, limitPeople: 0, upgradeTaps: 0, upgraded: 0 }); assert.equal(empty.rate, null, "no rate from nobody");
+  assert.deepEqual(empty.totals, { opens: 0, people: 0, answers: 0, tokens: 0, limitHits: 0, limitPeople: 0, upgradeTaps: 0, upgraded: 0 }); assert.equal(empty.rate, null, "no rate from nobody");
 
-  // Nov 12: Cy is already a member. Ann and Bob open, use their two answers, and hit the limit (Ann twice).
+  // Nov 12: Cy is already a member. Ann and Bob open, use their four answers (300 tokens each), and hit the limit (Ann twice).
   await s.call("PUT", `/api/admin/clients/${cy.client.id}/membership`, { tier: "member" }, A);
   await ev(ann.token, "open"); await ev(ann.token, "open"); await ev(bob.token, "open"); await ev(cy.token, "open");
-  for (const p of [ann, bob]) { await s.answer(p.token, { kind: "pain" }); await s.answer(p.token, { kind: "book" }); assert.equal((await s.answer(p.token)).body.limited, true); }
+  for (const p of [ann, bob]) { await s.answer(p.token, { kind: "pain" }); await s.answer(p.token, { kind: "book" }); await s.answer(p.token, { kind: "pain" }); await s.answer(p.token, { kind: "book" }); assert.equal((await s.answer(p.token)).body.limited, true); }
   assert.equal((await s.answer(ann.token)).body.limited, true);
   for (let i = 0; i < 4; i++) await s.answer(cy.token, { kind: "programs" });
   await ev(ann.token, "upgrade"); await ev(bob.token, "tomorrow");
@@ -203,17 +208,18 @@ test("guide: the owner's numbers add up, day by day, and count who upgraded afte
   s.at("2026-11-13T15:00:00Z");
   await s.call("PUT", `/api/admin/clients/${ann.client.id}/membership`, { tier: "member" }, A);
   await ev(bob.token, "open"); await ev(dee.token, "open");
-  await s.answer(bob.token); await s.answer(bob.token); assert.equal((await s.answer(bob.token)).body.limited, true);
+  for (let i = 0; i < 4; i++) await s.answer(bob.token);
+  assert.equal((await s.answer(bob.token)).body.limited, true);
   await s.answer(ann.token); await s.answer(ann.token); assert.equal((await s.answer(ann.token)).body.ok, true, "Ann is unlimited now");
 
   const r = (await s.call("GET", u + "?days=7", undefined, A)).body;
-  assert.equal(r.days, 7); assert.deepEqual(r.settings, { freePerDay: 2, ai: false, aiReady: false, aiHost: "", aiModel: "", aiWhy: "No AI service is connected on the server yet." });
-  assert.deepEqual(r.totals, { opens: 6, people: 4, answers: 13, limitHits: 3, limitPeople: 2, upgradeTaps: 1, upgraded: 1 });
+  assert.equal(r.days, 7); assert.deepEqual(r.settings, { freeTokensPerDay: 1000, ai: false, aiReady: false, aiHost: "", aiModel: "", aiWhy: "No AI service is connected on the server yet." });
+  assert.deepEqual(r.totals, { opens: 6, people: 4, answers: 19, tokens: 5700, limitHits: 3, limitPeople: 2, upgradeTaps: 1, upgraded: 1 });
   assert.equal(r.rate, 0.5);
   assert.equal(r.byDay.length, 7); assert.deepEqual(r.byDay.map((d) => d.date), ["2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"]);
-  assert.deepEqual(r.byDay[4], { date: "2026-11-11", opens: 0, answers: 0, limitHits: 0, upgradeTaps: 0 });
-  assert.deepEqual(r.byDay[5], { date: "2026-11-12", opens: 4, answers: 8, limitHits: 2, upgradeTaps: 1 });
-  assert.deepEqual(r.byDay[6], { date: "2026-11-13", opens: 2, answers: 5, limitHits: 1, upgradeTaps: 0 });
+  assert.deepEqual(r.byDay[4], { date: "2026-11-11", opens: 0, answers: 0, tokens: 0, limitHits: 0, upgradeTaps: 0 });
+  assert.deepEqual(r.byDay[5], { date: "2026-11-12", opens: 4, answers: 12, tokens: 3600, limitHits: 2, upgradeTaps: 1 });
+  assert.deepEqual(r.byDay[6], { date: "2026-11-13", opens: 2, answers: 7, tokens: 2100, limitHits: 1, upgradeTaps: 0 });
   const d30 = (await s.call("GET", u, undefined, A)).body; assert.equal(d30.days, 30); assert.equal(d30.byDay.length, 30); assert.deepEqual(d30.totals, r.totals);
   assert.equal((await s.call("GET", u + "?days=90", undefined, A)).body.byDay.length, 90);
   assert.equal((await s.call("GET", u + "?days=12", undefined, A)).body.days, 30, "an unknown window is the default");
@@ -239,11 +245,11 @@ test("guide: members' routes need a member, the owner's routes need the owner", 
     assert.equal((await s.call(m, u, b)).status, 401, `${m} ${u} signed out`);
     assert.equal((await s.call(m, u, b, A)).status, 401, `${m} ${u} as the owner`);
   }
-  for (const [m, u, b] of [["GET", "/api/admin/guide/stats"], ["PUT", "/api/admin/guide/settings", { freePerDay: 9 }]]) {
+  for (const [m, u, b] of [["GET", "/api/admin/guide/stats"], ["PUT", "/api/admin/guide/settings", { freeTokensPerDay: 9000 }]]) {
     assert.equal((await s.call(m, u, b)).status, 401, `${m} ${u} signed out`);
     assert.equal((await s.call(m, u, b, fay.token)).status, 401, `${m} ${u} as a member`);
   }
-  assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freePerDay, 25, "none of that changed the setting");
+  assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freeTokensPerDay, 50000, "none of that changed the setting");
   assert.equal(fs.existsSync(path.join(s.dataDir, "guide.json")), false, "or wrote anything");
 });
 
@@ -260,10 +266,10 @@ test("guide AI answers: off until the owner switches them on, and only ever with
   // a service that does not sign one: refused whatever the switch says
   const router = await start({ scribe: { url: "https://openrouter.ai/api/v1", key: "k_made_up", model: "any" } }); t.after(router.close);
   const A1 = await router.adminToken();
-  r = await router.call("PUT", "/api/admin/guide/settings", { ai: true, freePerDay: 9 }, A1);
+  r = await router.call("PUT", "/api/admin/guide/settings", { ai: true, freeTokensPerDay: 9000 }, A1);
   assert.equal(r.status, 400); assert.match(r.body.error, /does not sign a business associate agreement/);
   const st = (await router.call("GET", "/api/admin/guide/stats", undefined, A1)).body.settings;
-  assert.deepEqual([st.freePerDay, st.ai, st.aiReady, st.aiHost], [25, false, false, "openrouter.ai"], "a refused change changes nothing");
+  assert.deepEqual([st.freeTokensPerDay, st.ai, st.aiReady, st.aiHost], [50000, false, false, "openrouter.ai"], "a refused change changes nothing");
   // connected and allowed, but the owner has not switched it on: the model is never called
   const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
   const A = await s.adminToken(), zed = await s.signup("Zed Quillon");
@@ -271,7 +277,7 @@ test("guide AI answers: off until the owner switches them on, and only ever with
   assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "where are programs" }, zed.token)).body, { ok: false, ai: false });
   assert.equal(m.seen.length, 0); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 0);
   r = await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);
-  assert.deepEqual(r.body, { settings: { freePerDay: 25, ai: true, aiReady: true, aiHost: m.host, aiModel: "small-one", aiWhy: "" } });
+  assert.deepEqual(r.body, { settings: { freeTokensPerDay: 50000, ai: true, aiReady: true, aiHost: m.host, aiModel: "small-one", aiWhy: "" } });
   assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, true);
   await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);   // no change: not a second ledger entry
   await s.call("PUT", "/api/admin/guide/settings", { ai: false }, A);
@@ -280,7 +286,7 @@ test("guide AI answers: off until the owner switches them on, and only ever with
   assert.deepEqual(rows.map((e) => e.meta).sort((a, b) => Number(a.on) - Number(b.on)), [{ on: false, host: m.host, model: "small-one" }, { on: true, host: m.host, model: "small-one" }]);
 });
 
-test("guide AI answers: the sentence goes without the member's name, one answer is counted, and nothing typed or said is kept", async (t) => {
+test("guide AI answers: the sentence goes without the member's name, the tokens it used are counted, and nothing typed or said is kept", async (t) => {
   const MARK = "ZZMARKER", SAID = "YYSAIDMARK";
   const m = await model((n) => (n === 3 ? { status: 500 } : n === 4 ? { content: "Sure thing!" } : { content: `{"say":"I understand, that can be frustrating. ${SAID}","places":["pain","book","nowhere"],"area":"Knee"}` })); t.after(m.close);
   const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
@@ -291,7 +297,8 @@ test("guide AI answers: the sentence goes without the member's name, one answer 
   assert.equal(m.seen.length, 0);
   const ok = await ask(`Hi I'm Zed Quillon, zed.quillon@example.com. ${MARK} my knee hurts`);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", used: 1, limit: 25, left: 24 });
+  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", suggested: { programs: [], videos: [], guides: [], tip: "" },
+    tokens: 1000, unit: "tokens", used: 1000, limit: 50000, left: 49000 }, "the tokens the service says it used");
   assert.equal(m.seen.length, 1); const sent = JSON.stringify(m.seen[0].body);
   assert.equal(/Zed|Quillon|zed\.quillon/.test(sent), false, "the member's name and email did not leave"); assert.match(sent, /my knee hurts/);
   assert.equal(sent.includes(zed.client.id), false, "nor anything else about them");
@@ -299,21 +306,21 @@ test("guide AI answers: the sentence goes without the member's name, one answer 
 
   // an emergency is answered in the app: not sent, not counted
   assert.deepEqual((await ask(`${MARK} I have chest pain and can't breathe`)).body, { ok: true, urgent: true });
-  assert.equal(m.seen.length, 1); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1);
+  assert.equal(m.seen.length, 1); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1000);
 
   // a member is counted too, with no limit
   const mel = await s.signup("Mel Member"); await s.call("PUT", `/api/admin/clients/${mel.client.id}/membership`, { tier: "member" }, A);
-  assert.deepEqual([(await ask(`${MARK} sore knee`, mel.token)).body.used, m.seen.length], [1, 2]);
+  assert.deepEqual([(await ask(`${MARK} sore knee`, mel.token)).body.used, m.seen.length], [1000, 2]);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.left, null);
 
   // the service fails, or answers nonsense: the app falls back to the device, and nothing is counted
   assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
   assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
-  assert.equal(m.seen.length, 4); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1);
+  assert.equal(m.seen.length, 4); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1000);
 
   // at the limit the model is not called, and the hit is recorded like any other
-  await s.call("PUT", "/api/admin/guide/settings", { freePerDay: 1 }, A);
-  assert.deepEqual((await ask(`${MARK} one more about my knee`)).body, { ok: false, limited: true, used: 1, limit: 1, left: 0 });
+  await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
+  assert.deepEqual((await ask(`${MARK} one more about my knee`)).body, { ok: false, limited: true, used: 1000, limit: 1000, left: 0, unit: "tokens" });
   assert.equal(m.seen.length, 4);
   const stats = (await s.call("GET", "/api/admin/guide/stats?days=7", undefined, A)).body;
   assert.deepEqual([stats.totals.answers, stats.totals.limitHits, stats.totals.limitPeople], [2, 1, 1]);
@@ -325,7 +332,7 @@ test("guide AI answers: the sentence goes without the member's name, one answer 
   assert.equal(/guide\/ask/.test(JSON.stringify((await s.call("GET", "/api/admin/audit", undefined, A)).body)), false);
 
   // the owner switches it off: the next sentence is not sent
-  await s.call("PUT", "/api/admin/guide/settings", { ai: false, freePerDay: 25 }, A);
+  await s.call("PUT", "/api/admin/guide/settings", { ai: false, freeTokensPerDay: 50000 }, A);
   assert.deepEqual((await ask("where are the programs", mel.token)).body, { ok: false, ai: false }); assert.equal(m.seen.length, 4);
   // and one account cannot fire dozens a minute at it: Zed has sent twelve in this minute (the refused ones count too)
   const thirteenth = await ask("where are the programs");
