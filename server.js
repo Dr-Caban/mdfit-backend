@@ -28,6 +28,7 @@ const { mountPayments } = require("./lib/payments");
 const { createSecurity } = require("./lib/security");
 const { createCalSync } = require("./lib/calsync");
 const { createAudit } = require("./lib/audit");
+const { createStaff, mountStaff } = require("./lib/staff");
 const {
   ValidationError, LEAD_STATUSES, APPT_STATUSES, GOALS, SERVICES, AREAS, DURATIONS, SURGERY, DAYS,
   defaultSettings, leadInput, bookingInput, appointmentInput, feedbackInput, classInput, mergeSettings, EMAIL_RE, meetingUrl } = require("./lib/validate");
@@ -478,6 +479,9 @@ function createApp(cfg = loadConfig()) {
 
   // ---- Audit ledger (hash-chained, Ed25519-signed): recorded after each response
   const audit = createAudit({ store, signingKey: cfg.auditSigningKey, ipSalt: cfg.sessionSecret, logger });
+  // ---- Staff accounts, roles and permissions (lib/staff.js). The owner is the environment account and is
+  // never stored here; everyone else is a record in the "staff" collection with their own permission list.
+  const staff = createStaff({ store, cfg, audit, logger, now: () => (typeof cfg.now === "function" ? cfg.now() : new Date()) });
   const QUIET = new Set(["GET /api/admin/me", "GET /api/admin/messages", "GET /api/admin/calsync", "GET /api/admin/audit"]);
   app.use((req, res, next) => {
     res.on("finish", () => {
@@ -491,7 +495,8 @@ function createApp(cfg = loadConfig()) {
       // Subject is the record's id (client, appointment, lead...), never a name or email
       const subject = params.clientId || params.id || (req.client && req.client.id) || "";
       let actor = "", action = "";
-      if (p === "/api/admin/login") { actor = "admin"; action = ok ? "auth.admin.login" : "auth.admin.login_failed"; }
+      // req.loginActor names the staff member who signed in; the owner stays plain "admin", as before.
+      if (p === "/api/admin/login") { actor = req.loginActor || "admin"; action = ok ? "auth.admin.login" : "auth.admin.login_failed"; }
       else if (p === "/api/clients/login") { actor = ok ? "client" : "anonymous"; action = ok ? "auth.client.login" : "auth.client.login_failed"; }
       else if (p === "/api/clients/signup" && ok) { actor = "client"; action = "auth.client.signup"; }
       else if (p === "/api/clients/reset" && ok) { actor = "client"; action = "auth.client.password_reset"; }
@@ -555,18 +560,48 @@ function createApp(cfg = loadConfig()) {
   }
   const formLimit = limiter(20, 60 * 60 * 1000);
   const loginFails = limiter(10, 15 * 60 * 1000);
+  const emailFails = limiter(10, 15 * 60 * 1000); // the same ceiling again, per email address
 
   // Bots fill the hidden "mdfit_hp" field (formerly "company", which browsers autofilled for real people); pretend success and drop it.
   const honeypot = (req, res, next) => (req.body && (req.body.mdfit_hp || req.body.company) ? res.status(201).json({ ok: true }) : next());
 
   // ---- Auth: "Authorization: Bearer <token>" from /api/admin/login
+  // Two kinds of caller: the OWNER (ADMIN_EMAIL from the host's variables, token { sub, exp } exactly as before)
+  // and a STAFF member (token { sub: email, role: "staff", exp }). A staff member's record is re-read from the
+  // store on every single request and never taken from the token, so switching someone off or narrowing what they
+  // can reach takes effect at once, on tokens that are already out.
   const NOT_SET_UP = "Admin login isn't set up on the server (ADMIN_EMAIL, ADMIN_PASSWORD_HASH, SESSION_SECRET).";
+  // The owner has no staff record, so /me reports the reserved id "owner" (lib/staff.js never issues it).
+  const OWNER_ACCOUNT = () => ({ isOwner: true, id: staff.OWNER_ID, email: cfg.adminEmail, name: "Owner", role: "owner", permissions: [...staff.PERMISSION_KEYS] });
   function requireAdmin(req, res, next) {
     if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
     const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
     const payload = m && verifyToken(m[1], cfg.sessionSecret);
-    if (!payload || payload.sub !== cfg.adminEmail) return res.status(401).json({ error: "Please log in again." });
-    req.admin = payload.sub;
+    const email = payload ? String(payload.sub || "").trim().toLowerCase() : "";
+    const again = () => res.status(401).json({ error: "Please log in again." });
+    if (!payload || !email) return again();
+    if (email === cfg.adminEmail) {
+      // A member or board token can never be an owner token: those carry a role, and the owner's does not.
+      if (payload.role) return again();
+      req.account = OWNER_ACCOUNT();
+    } else {
+      if (payload.role !== "staff") return again();
+      const rec = staff.byEmail(email);
+      if (!rec || rec.active !== true) return again();
+      req.account = { isOwner: false, id: rec.id, email: rec.email, name: rec.name, role: rec.role, permissions: [...(rec.permissions || [])], mustChangePassword: !!rec.mustChangePassword };
+    }
+    req.admin = req.account.email; // kept for the audit middleware and every existing handler
+    next();
+  }
+
+  // ---- What this account may reach. Resolved from the first segment of the path; anything lib/staff.js does not
+  // map is OWNER-ONLY, so a new admin route is never handed to staff by accident.
+  function requirePermission(req, res, next) {
+    if (req.account && req.account.isOwner) return next();
+    const rule = staff.needFor(req.path);
+    if (rule.open) return next();
+    if (rule.owner) return res.status(403).json({ error: staff.DENY_OWNER, need: "owner" });
+    if (!req.account.permissions.includes(rule.need)) return res.status(403).json({ error: staff.denial(rule.need), need: rule.need });
     next();
   }
 
@@ -851,54 +886,87 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   const mfaOn = () => !cfg.mfaForceOff && notify.enabled && mfaState().enabled === true && mfaState().method === "email";
   const pendingCodes = new Map(); // purpose -> { hash, exp, tries, sentAt }
   const codeHash = (c) => crypto.createHash("sha256").update("mdfit-mfa:" + cfg.sessionSecret + ":" + c).digest("hex");
-  async function emailCode(purpose) {
-    const prev = pendingCodes.get(purpose);
+  // The code goes to the address of the person signing in, and the pending code is keyed per account as well as
+  // per purpose, so two people signing in at the same moment never take each other's code.
+  const codeKey = (purpose, to) => `${purpose}:${String(to || cfg.adminEmail).trim().toLowerCase()}`;
+  async function emailCode(purpose, to = cfg.adminEmail) {
+    const key = codeKey(purpose, to);
+    const prev = pendingCodes.get(key);
     if (prev && Date.now() - prev.sentAt < 30000) return true; // don't resend within 30 s
     const code = String(crypto.randomInt(0, 1e6)).padStart(6, "0");
-    pendingCodes.set(purpose, { hash: codeHash(code), exp: Date.now() + 10 * 60e3, tries: 0, sentAt: Date.now() });
-    return notify.client(cfg.adminEmail, `${code} is your MD Fit admin code`, `Your MD Fit admin sign-in code is:\n\n${code}\n\nIt expires in 10 minutes. If you didn't try to sign in, someone has your password: change it right away.\n\nMD Fit`);
+    pendingCodes.set(key, { hash: codeHash(code), exp: Date.now() + 10 * 60e3, tries: 0, sentAt: Date.now() });
+    return notify.client(to, `${code} is your MD Fit admin code`, `Your MD Fit admin sign-in code is:\n\n${code}\n\nIt expires in 10 minutes. If you didn't try to sign in, someone has your password: change it right away.\n\nMD Fit`);
   }
-  function checkCode(purpose, code) {
-    const p = pendingCodes.get(purpose);
-    if (!p || Date.now() > p.exp || p.tries >= 5) { pendingCodes.delete(purpose); return false; }
+  function checkCode(purpose, code, to = cfg.adminEmail) {
+    const key = codeKey(purpose, to);
+    const p = pendingCodes.get(key);
+    if (!p || Date.now() > p.exp || p.tries >= 5) { pendingCodes.delete(key); return false; }
     p.tries++;
     const ok = crypto.timingSafeEqual(Buffer.from(p.hash), Buffer.from(codeHash(String(code || "").trim())));
-    if (ok) pendingCodes.delete(purpose);
+    if (ok) pendingCodes.delete(key);
     return ok;
   }
 
+  // The owner (ADMIN_EMAIL) or any active staff account (lib/staff.js). Same request and response either way.
+  // Attempts are limited per IP and per email address, so one account can't be ground down from many addresses.
   app.post("/api/admin/login", (req, res) => {
     if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
     if (loginFails.blocked(req.ip)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
     const email = String((req.body && req.body.email) || "").trim().toLowerCase();
     const password = String((req.body && req.body.password) || "");
-    const ok = email === cfg.adminEmail && verifyPassword(password, cfg.adminPasswordHash);
-    if (!ok) {
+    if (email && emailFails.blocked(email)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const isOwner = Boolean(email) && email === cfg.adminEmail;
+    // A staff member whose record is missing or switched off can't sign in at all.
+    const person = isOwner ? (verifyPassword(password, cfg.adminPasswordHash) ? { id: "", email } : null) : staff.authenticate(email, password);
+    if (!person) {
       loginFails.hit(req.ip);
+      if (email) emailFails.hit(email);
       logger.warn("login_failed", { email: mask(email || "-") });
       return res.status(401).json({ error: "Wrong email or password." });
     }
     if (mfaOn()) {
       if (!req.body.code) {
-        emailCode("login");
-        return res.status(401).json({ error: `We emailed a 6-digit code to ${mask(cfg.adminEmail)}. Enter it to finish signing in.`, mfaRequired: true });
+        emailCode("login", email);
+        return res.status(401).json({ error: `We emailed a 6-digit code to ${mask(email)}. Enter it to finish signing in.`, mfaRequired: true });
       }
-      if (!checkCode("login", req.body.code)) {
+      if (!checkCode("login", req.body.code, email)) {
         loginFails.hit(req.ip);
+        emailFails.hit(email);
         logger.warn("mfa_failed", { email: mask(email) });
         return res.status(401).json({ error: "That code didn't work or has expired. Leave the code blank and sign in again for a new one.", mfaRequired: true });
       }
     }
     loginFails.reset(req.ip);
+    emailFails.reset(email);
     const exp = Date.now() + SESSION_HOURS * 3600e3;
-    activity("login", { email });
-    res.json({ token: signToken({ sub: email, exp }, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
+    if (!isOwner) { staff.noteLogin(person.id); req.loginActor = `admin:${email}`; }
+    activity("login", { email, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
+    const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", exp };
+    res.json({ token: signToken(payload, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
   });
 
   const admin = express.Router();
   admin.use(requireAdmin);
+  admin.use(requirePermission);
 
-  admin.get("/me", (req, res) => res.json({ email: req.admin, emailNotifications: notify.enabled, mfa: mfaOn() }));
+  admin.get("/me", (req, res) => {
+    const a = req.account;
+    res.json({
+      id: a.id, email: a.email, name: a.name, role: a.role, permissions: [...a.permissions], isOwner: a.isOwner,
+      mustChangePassword: !a.isOwner && !!a.mustChangePassword,
+      emailNotifications: notify.enabled, mfa: mfaOn()
+    });
+  });
+
+  // Change your own password. The owner's password is a hash in the host's variables, not in the store.
+  admin.post("/me/password", (req, res) => {
+    const b = req.body || {};
+    if (req.account.isOwner) return res.status(400).json({ error: "The owner's password is set in the host's variables (ADMIN_PASSWORD_HASH), not here. Make a new hash with `npm run hash-password` and update that variable." });
+    const out = staff.changeOwnPassword(req.account, b.current, b.password, req.ip);
+    if (out.notFound) return res.status(401).json({ error: "Please log in again." });
+    if (out.wrong) return res.status(403).json({ error: "Your current password is wrong." });
+    res.json({ ok: true });
+  });
   admin.get("/online", (req, res) => { const rt = app.get("rt"); res.json(rt ? rt.onlineStats() : { members: [], memberCount: 0, visitorCount: 0 }); });
   admin.get("/mfa", (req, res) => res.json({ enabled: mfaOn(), method: "email", emailReady: notify.enabled, forcedOff: !!cfg.mfaForceOff, sendsTo: mask(cfg.adminEmail) }));
   admin.post("/mfa/start", async (req, res) => {
@@ -1527,6 +1595,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   const guideAI = require("./lib/guide-ai").createGuideAI({ cfg, store, logger });
   require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership });
+
+  mountStaff({ admin, staff, activity }); // /api/admin/staff: the owner (and anyone with "staff") manages accounts
 
   app.use("/api/admin", admin);
 
