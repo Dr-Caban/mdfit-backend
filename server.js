@@ -1403,6 +1403,12 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
 
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
+  // ---- Progress report: one calculation for the member's "My progress" and the workspace's view of that member
+  // (lib/progress.js). Read-only; free accounts see 30 days, full access (membership, active plan, inpatient) 365.
+  {
+    const { programProgress, workoutStats } = require("./lib/clients");
+    require("./lib/progress").mountProgress({ app, admin, me: cl.me, store, clients: cl.clients, today: cl.today, activeMembership: cl.activeMembership, programProgress, workoutStats });
+  }
   // ---- Built-in video visits: the waiting room and call set-up ride on the live connection (attached at start-up);
   // these two routes hand each side the addresses its browser needs to find a path to the other.
   const tele = require("./lib/telehealth");
