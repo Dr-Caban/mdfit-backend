@@ -72,3 +72,12 @@ test("Android (FCM) tokens register alongside iPhone tokens", () => {
   assert.equal(push.unregister(fcmTok), true);
   assert.equal(store.read("devices", []).length, 0);
 });
+
+test("the clinic day each member was last pushed is remembered, so Sunny's nudge never doubles up a day", () => {
+  const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), "push-")));
+  const push = createPush({ key: key(), keyId: "K1", teamId: "T1", store, nowParts, zonedToUtc, tz: "UTC" });
+  assert.equal(push.pushedOn("a"), "");
+  push.toClient("a", { title: "Hello", body: "Test" });
+  assert.equal(push.pushedOn("a"), nowParts("UTC", new Date()).date);
+  assert.equal(push.pushedOn("b"), "");
+});

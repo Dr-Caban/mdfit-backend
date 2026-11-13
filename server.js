@@ -1484,10 +1484,14 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
   // Achievements (a new gem, a badge, the daily goal), the evening streak nudge, and group-class reminders.
   // One sweep, every minute; everything it sends is recorded so nothing goes out twice.
+  // Also Sunny's one daily nudge (comebacks, new picks, the Sarasota-sunlight morning line): lib/nudges.js.
   const nudges = require("./lib/nudges").createNudges({
     store, clients: cl.clients, save: cl.save, push, rewardsOf: cl.rewardsOf,
-    nowParts, zonedToUtc, prettyTime, tz: cfg.tz, now: cfg.now, logger
+    nowParts, zonedToUtc, prettyTime, tz: cfg.tz, now: cfg.now, logger,
+    pushedOn: (id) => (push.pushedOn ? push.pushedOn(id) : ""), fetchImpl: cfg.nudgeWeather === false ? null : undefined
   });
+  // What Sunny's nudges did, for the owner (Insights -> Sunny): sent, opened within 6 hours, came back within 2 days
+  admin.get("/guide/nudges", (req, res) => res.json(nudges.stats(req.query.days)));
   app.set("nudge", () => {
     try {
       const { date: today } = nowParts(cfg.tz, cfg.now());
