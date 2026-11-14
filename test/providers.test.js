@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const { loadConfig } = require("../server");
 const { settingsFrom } = require("../lib/scribe");
 
-const KEYS = ["AI_PROVIDER", "AI_MODEL", "AI_API_URL", "AI_API_KEY", "MOONSHOT_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "MOONSHOT_MODEL", "OPENROUTER_MODEL", "OPENAI_MODEL", "SCRIBE_API_URL", "SCRIBE_API_KEY", "SCRIBE_MODEL"];
+const KEYS = ["BEDROCK_API_KEY", "AI_PROVIDER", "AI_MODEL", "AI_API_URL", "AI_API_KEY", "MOONSHOT_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "MOONSHOT_MODEL", "OPENROUTER_MODEL", "OPENAI_MODEL", "SCRIBE_API_URL", "SCRIBE_API_KEY", "SCRIBE_MODEL"];
 function withEnv(vars, fn) {
   const before = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
   for (const k of KEYS) delete process.env[k];
@@ -29,13 +29,13 @@ test("AI provider names: moonshot, openrouter and openai each use their own addr
   const off = withEnv({ AI_PROVIDER: "openrouter", AI_MODEL: "moonshotai/kimi-k2:free" }, () => settingsFrom(loadConfig()));
   assert.equal(off.enabled, false);
 
-  // a backup is any other provider with its key and a model to use: its own variable, or the provider's default
+  // a backup is any other provider with its key and a model to use (its own variable, or the provider's default),
+  // and only if it is under a business associate agreement (lib/baa.js): OpenRouter and Moonshot never are
   const chain = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6", OPENROUTER_API_KEY: "or", OPENROUTER_MODEL: "some/model:free", OPENAI_API_KEY: "oa" }, () => settingsFrom(loadConfig()));
   assert.equal(chain.host, "api.moonshot.ai");
-  assert.deepEqual(chain.fallbacks.map((f) => [f.host, f.model, f.key]), [["openrouter.ai", "some/model:free", "or"], ["api.openai.com", "gpt-4o-mini", "oa"]]);
-  // keys alone: each backup uses its provider's default. The free one is tried before the paid one.
-  const keys = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6", OPENROUTER_API_KEY: "or", OPENAI_API_KEY: "oa" }, () => settingsFrom(loadConfig()));
-  assert.deepEqual(keys.fallbacks.map((f) => [f.host, f.model]), [["openrouter.ai", "openrouter/free"], ["api.openai.com", "gpt-4o-mini"]]);
+  assert.deepEqual(chain.fallbacks.map((f) => [f.host, f.model, f.key]), [["api.openai.com", "gpt-4o-mini", "oa"]], "OpenRouter is never a backup for visit notes");
+  const keys = withEnv({ AI_PROVIDER: "bedrock", BEDROCK_API_KEY: "br", AI_MODEL: "openai.gpt-oss-120b-1:0", MOONSHOT_API_KEY: "ms", MOONSHOT_MODEL: "kimi", OPENROUTER_API_KEY: "or", OPENAI_API_KEY: "oa" }, () => settingsFrom(loadConfig()));
+  assert.deepEqual(keys.fallbacks.map((f) => [f.host, f.model]), [["api.openai.com", "gpt-4o-mini"]], "Moonshot and OpenRouter keys add no backup");
   // a provider with no key is never a backup
   const none = withEnv({ AI_PROVIDER: "moonshot", MOONSHOT_API_KEY: "ms", AI_MODEL: "kimi-k2.6" }, () => settingsFrom(loadConfig()));
   assert.deepEqual(none.fallbacks, []);
