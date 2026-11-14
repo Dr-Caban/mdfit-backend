@@ -73,8 +73,8 @@ test("guide AI: the reply is read strictly", () => {
 });
 
 test("guide AI: Amazon Bedrock's OpenAI-compatible endpoint is accepted in every region, and look-alikes are not", () => {
-  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.us-east-2.amazonaws.com", "bedrock-runtime.us-west-2.amazonaws.com", "bedrock-runtime.eu-central-1.amazonaws.com"]) assert.equal(hostAllowed(h), true, h);
-  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com.evil.example", "evil-bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.amazonaws.com", "bedrock.us-east-1.amazonaws.com", "bedrock-runtime.us-east-1.amazonaws.co"]) assert.equal(hostAllowed(h), false, h);
+  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.us-east-2.amazonaws.com", "bedrock-runtime.us-west-2.amazonaws.com", "bedrock-runtime.eu-central-1.amazonaws.com", "bedrock-mantle.us-east-1.api.aws", "bedrock-mantle.us-west-2.api.aws"]) assert.equal(hostAllowed(h), true, h);
+  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com.evil.example", "evil-bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.amazonaws.com", "bedrock-mantle.us-east-1.api.aws.evil.example", "evil-bedrock-mantle.us-east-1.api.aws", "bedrock-mantle.api.aws", "bedrock-mantle.us-east-1.api.aws.co", "bedrock.us-east-1.amazonaws.com", "bedrock-runtime.us-east-1.amazonaws.co"]) assert.equal(hostAllowed(h), false, h);
 });
 
 test("config: AI_PROVIDER=bedrock points at the region's OpenAI-compatible endpoint with the Bedrock key and model", () => {
@@ -91,6 +91,11 @@ test("config: AI_PROVIDER=bedrock points at the region's OpenAI-compatible endpo
     assert.equal(s.url, "https://bedrock-runtime.us-east-2.amazonaws.com/openai/v1");
     const ai = createGuideAI({ cfg: { scribe: s }, logger: { warn() {} } });
     assert.equal(ai.status().ready, true, "a Bedrock connection may carry members' messages once AI answers are switched on");
+    // the other endpoint, with its own quotas: bedrock-mantle.<region>.api.aws/v1, same key
+    Object.assign(process.env, { BEDROCK_ENDPOINT: "mantle", BEDROCK_REGION: "us-east-1", BEDROCK_MODEL: "openai.gpt-oss-120b" });
+    s = loadConfig().scribe;
+    assert.equal(s.url, "https://bedrock-mantle.us-east-1.api.aws/v1"); assert.equal(s.key, "bedrock-key-not-real"); assert.equal(s.model, "openai.gpt-oss-120b");
+    assert.equal(createGuideAI({ cfg: { scribe: s }, logger: { warn() {} } }).status().ready, true, "mantle is Amazon Bedrock too");
   } finally { for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k]; Object.assign(process.env, keep); }
 });
 

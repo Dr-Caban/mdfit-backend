@@ -88,7 +88,11 @@ function loadConfig() {
         // Amazon Bedrock through its OpenAI-compatible endpoint, signed with a Bedrock API key. It is covered by the
         // AWS Business Associate Addendum once that is accepted in AWS Artifact. BEDROCK_REGION picks the region
         // (us-east-1 if unset); BEDROCK_MODEL names the model, which must be enabled for the account in that region.
-        bedrock: { url: `https://bedrock-runtime.${env("BEDROCK_REGION", "us-east-1")}.amazonaws.com/openai/v1`, key: env("BEDROCK_API_KEY") }
+        // BEDROCK_ENDPOINT=mantle uses Bedrock's other OpenAI-compatible endpoint (bedrock-mantle.<region>.api.aws),
+        // which has its own quotas: a new account can have 0 on bedrock-runtime and a working allowance on mantle.
+        // Model ids differ between the two (runtime: openai.gpt-oss-120b-1:0, mantle: openai.gpt-oss-120b).
+        bedrock: { url: /^mantle$/i.test(env("BEDROCK_ENDPOINT", "")) ? `https://bedrock-mantle.${env("BEDROCK_REGION", "us-east-1")}.api.aws/v1`
+          : `https://bedrock-runtime.${env("BEDROCK_REGION", "us-east-1")}.amazonaws.com/openai/v1`, key: env("BEDROCK_API_KEY") }
       };
       const first = env("AI_PROVIDER").toLowerCase(), p = known[first] || {};
       // Backups: any other provider that has its key set and a model to use: its own model variable (MOONSHOT_MODEL,
