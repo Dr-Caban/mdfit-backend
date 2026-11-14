@@ -175,7 +175,8 @@ test("tiers: Expert Advice ($50) is offered by default and added to tiers saved 
   const d = content.defaultContent().tiers;
   assert.deepEqual(d.map((x) => [x.id, x.price, !!x.directMessages]), [["member", 19.95, false], ["accountability", 29.95, false], ["expert", 50, true], ["premium", 200, true], ["premium-plus", 349, true]]);
   assert.ok(d.find((x) => x.id === "member").perks.includes("Unlimited Sunny"));
-  assert.ok(d.find((x) => x.id === "expert").perks.includes("Message Dr. Jared directly for expert advice"));
+  assert.ok(d.find((x) => x.id === "expert").perks.includes("Message Dr. Jared directly, one to one"));
+  assert.ok(d.find((x) => x.id === "expert").perks.some((x) => /business days during clinic hours/.test(x)), "the tier says when he answers, before anyone buys");
   // saved before Expert Advice existed: added after Accountability; a saved 1-on-1 tier gets messaging
   const old = [{ id: "member", name: "Membership", price: 19.95, meetings: 0, perks: [] }, { id: "accountability", name: "Acc", price: 29.95, meetings: 0, perks: [] }, { id: "vip", name: "VIP", price: 500, meetings: 4, perks: [] }];
   const got = content.tiersOf({ tiers: old });
@@ -207,9 +208,9 @@ test("messaging: Expert Advice, 1-on-1 tiers, active plans, clinic patients and 
 
   // a free account and the $19.95 membership: read-only, with the reason
   let v = await can(fay.token);
-  assert.equal(v.canSend, false); assert.equal(v.why, "Messaging Dr. Jared directly is part of Expert Advice ($50/mo) and the 1-on-1 tiers.");
+  assert.equal(v.canSend, false); assert.equal(v.why, "Messaging Dr. Jared directly is part of Expert Advice ($50/mo) and the 1-on-1 tiers. He replies on business days, during clinic hours.");
   let r = await send(fay.token);
-  assert.equal(r.status, 403); assert.deepEqual(r.body, { error: "Messaging Dr. Jared directly is part of Expert Advice ($50/mo) and the 1-on-1 tiers.", upgrade: true });
+  assert.equal(r.status, 403); assert.deepEqual(r.body, { error: "Messaging Dr. Jared directly is part of Expert Advice ($50/mo) and the 1-on-1 tiers. He replies on business days, during clinic hours.", upgrade: true });
   await s.call("PUT", `/api/admin/clients/${mel.client.id}/membership`, { tier: "member" }, A);
   assert.equal((await send(mel.token)).status, 403);
 
