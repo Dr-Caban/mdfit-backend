@@ -71,3 +71,21 @@ test("scribe backups: when no service can answer, each reason is given and nothi
   assert.match(r.body.error, /no credit or allowance left/); assert.match(r.body.error, /Backup: .*does not offer the model "backup-model"/); assert.match(r.body.error, /Nothing was saved\.$/);
   assert.equal(first.seen.length, 1); assert.equal(second.seen.length, 1);
 });
+
+test("scribe and HIPAA: a visit note is never sent to a service without a business associate agreement, first or backup", async (t) => {
+  const { hostAllowed } = require("../lib/baa");
+  for (const h of ["openrouter.ai", "api.moonshot.ai", "api.example.com", "bedrock-runtime.us-east-1.amazonaws.com.evil.example"]) assert.equal(hostAllowed(h), false, h);
+  for (const h of ["bedrock-runtime.us-east-1.amazonaws.com", "bedrock-mantle.us-east-1.api.aws", "api.openai.com", "127.0.0.1:4000"]) assert.equal(hostAllowed(h), true, h);
+  // backups at OpenRouter and Moonshot (the way their keys would add them) are dropped; a local stand-in stays
+  const ok = await service(t, { status: 200, text: "Drafted locally." });
+  const s = await start({ scribe: { url: "https://openrouter.ai/api/v1", key: "k1", model: "openrouter/free",
+    fallbacks: [{ url: "https://api.moonshot.ai/v1", key: "k2", model: "kimi" }, { url: "https://openrouter.ai/api/v1", key: "k3", model: "x" }, { url: ok.url, key: "k4", model: "local" }] } });
+  t.after(s.close);
+  const A = await s.adminToken();
+  const st = (await s.call("GET", "/api/admin/scribe", undefined, A)).body;
+  assert.equal(st.baa, false); assert.deepEqual(st.backups.map((b) => b.model), ["local"], "only services under a BAA are kept as backups");
+  // a first service without a BAA: refused before anything is sent, even though a covered backup exists
+  const r = await s.call("POST", "/api/admin/scribe/draft", { text: VISIT, kind: "soap" }, A);
+  assert.equal(r.status, 503); assert.match(r.body.error, /does not sign a business associate agreement/);
+  assert.equal(ok.seen.length, 0, "nothing was sent anywhere");
+});
