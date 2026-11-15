@@ -69,6 +69,7 @@ test("search analytics: typing bursts, truncation and video-filter noise collaps
   const T = Date.parse("2026-11-10T15:00:00Z"); const ev = []; let t = T;
   const full = "neck neurologist used to give me occipital blocks my rom is very little until i started seeing a medical massage therapist";
   for (let i = 2; i <= full.length; i++) { t += 300; ev.push({ t: "query", ts: t, q: full.slice(0, i).trim(), n: 3 }); }
+  t += 32_000; // a mid-sentence pause, as seen in production on 2026-11-12
   for (let i = 0; i < 40; i++) { t += 300; ev.push({ t: "query", ts: t, q: full.slice(0, 120), n: 3 }); } // legacy truncated repeats
   ev.push({ t: "noclick", ts: t + 500, q: full.slice(0, 120), n: 3 });
   t += 3_600_000; for (const q of ["hi", "hip"]) { t += 400; ev.push({ t: "query", ts: t, q, n: 5 }); }
