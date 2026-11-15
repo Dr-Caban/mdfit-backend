@@ -48,6 +48,8 @@ function loadConfig() {
     dataKey: env("DATA_ENC_KEY"),
     auditSigningKey: env("AUDIT_SIGNING_KEY"),
     mfaForceOff: env("ADMIN_MFA") === "off",
+    // VIDEO_SYNC=off: the six-hourly video copy does not start on its own (lib/videos.js); the workspace button still does
+    videoSyncOff: /^(0|false|off|no)$/i.test(env("VIDEO_SYNC")),
     tz: env("TZ_NAME", "America/New_York"),
     resendKey: env("RESEND_API_KEY"),
     resendUrl: env("RESEND_URL", "https://api.resend.com"),
