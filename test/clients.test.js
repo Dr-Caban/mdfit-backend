@@ -1012,3 +1012,19 @@ test("wrong passwords are counted per account: another account's sign-in does no
   assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" })).status, 429, "locked even with the right password");
   assert.equal((await s.call("POST", "/api/clients/login", { email: "mallory@example.com", password: "mallory-pass-1" })).status, 200, "other accounts are not locked");
 });
+
+test("referral sign-ups: ledger entry, and the admin report counts them from the accounts", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await signup(s);
+  const code = (await s.call("GET", "/api/me/referral", undefined, a.body.token)).body.code;
+  await signup(s, { name: "Sam Roe", email: "sam@example.com", referralCode: code });
+  await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: "MDFIT-NOPE00" });
+  assert.equal((await s.call("GET", "/api/me/referral", undefined, a.body.token)).body.referrals, 1);
+  assert.equal((await s.call("GET", "/api/admin/referrals")).status, 401);
+  const r = await s.call("GET", "/api/admin/referrals?days=30", undefined, await s.adminToken());
+  assert.equal(r.status, 200);
+  assert.equal(r.body.totals.referredAllTime, 1);
+  assert.equal(r.body.totals.referrers, 1);
+  assert.equal(r.body.recent[0].name, "Sam Roe");
+  assert.equal(r.body.topReferrers[0].referrer, "Pat Doe");
+});
