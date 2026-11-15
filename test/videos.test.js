@@ -131,3 +131,23 @@ test("media sync: a file that took the server down gets a strike and is skipped 
     delete process.env.VIDEO_SYNC; assert.equal(loadConfig().videoSyncOff, false);
   } finally { if (keep === undefined) delete process.env.VIDEO_SYNC; else process.env.VIDEO_SYNC = keep; }
 });
+
+test("media sync: a file over the size limit is refused before it is fetched, with the size in the reason", async (t) => {
+  const f = await fakes(); t.after(f.close);
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sa = JSON.stringify({ client_email: "media@mdfit-test.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-v-"));
+  // the unshared clip is 128 bytes through the Drive API; with a 100-byte limit it must not be pulled onto the server
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
+    siteUrl: f.base, noVideoSync: true, cloudinaryApiUrl: f.base, driveApiUrl: f.base + "/drive", googleTokenUrl: f.base + "/token", drivePublicUrl: f.base + "/public?id=", googleServiceAccount: sa, mediaMaxBytes: 100 });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (m, u, b, tok) => { const r = await fetch(base + u, { method: m, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const adm = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+  await call("POST", "/api/admin/videos/migrate", {}, adm);
+  let st; for (let i = 0; i < 200; i++) { st = (await call("GET", "/api/admin/videos/status", undefined, adm)).body; if (st.job && st.job.finishedAt) break; await new Promise((r) => setTimeout(r, 50)); }
+  assert.match(st.failed["unshared-clip"], /Too large to copy through this server/);
+  assert.equal(f.seen.cloudinary.some((x) => x.multipart && /\/unshared-clip$/.test(x.public_id)), false, "its bytes never reached the upload");
+  assert.equal(st.failed["shared-clip"], undefined, "a clip that goes straight from its link is untouched");
+});
