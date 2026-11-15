@@ -18,7 +18,7 @@ const asset = (key, extra) => ({ key, source: "drive", drive_id: key, type: "vid
   display_name: key, tags: ["mdfit"], context: { name: key }, folder: "mdfit/videos/exercise-library/Exercise/Hips/Strength", ...extra });
 
 async function fakes() {
-  const seen = { cloudinary: [], driveApi: [] };
+  const seen = { cloudinary: [], driveApi: [], destroyed: [] };
   const srv = http.createServer(async (req, res) => {
     const u = new URL(req.url, "http://x");
     const json = (code, o) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
@@ -36,6 +36,11 @@ async function fakes() {
       seen.driveApi.push({ id: decodeURIComponent(u.pathname.split("/").pop()), auth: req.headers.authorization, alt: u.searchParams.get("alt") });
       if (req.headers.authorization !== "Bearer sa-token") return json(401, { error: "no" });
       res.writeHead(200, { "content-type": "video/mp4" }); return res.end(Buffer.alloc(128, 2));
+    }
+    if (/^\/v1_1\/testcloud\/(video|image)\/destroy$/.test(u.pathname)) {
+      let b = ""; for await (const c of req) b += c; const f = Object.fromEntries(new URLSearchParams(b));
+      seen.destroyed.push({ type: u.pathname.split("/")[3], ...f });
+      return json(200, { result: /gone-already/.test(f.public_id) ? "not found" : "ok" });
     }
     if (/^\/v1_1\/testcloud\/(video|image)\/upload$/.test(u.pathname)) {
       const ct = req.headers["content-type"] || "";
@@ -90,4 +95,131 @@ test("media sync: public link via Cloudinary, unshared file via the Drive API, s
   assert.deepEqual((await call("POST", "/api/admin/videos/migrate", {}, adm)).body, { started: true, total: 4 });
   for (let i = 0; i < 200; i++) { st = (await call("GET", "/api/admin/videos/status", undefined, adm)).body; if (st.job.finishedAt) break; await new Promise((r) => setTimeout(r, 50)); }
   assert.equal(st.job.total, 0);
+});
+
+test("media sync: a file that took the server down gets a strike and is skipped until someone retries it; VIDEO_SYNC=off stops the automatic run", async (t) => {
+  const f = await fakes(); t.after(f.close);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-v-"));
+  // What the store holds after a run was killed in the middle of "shared-clip" (the asset is written down before the work starts)
+  fs.writeFileSync(path.join(dataDir, "videos-testcloud.json"), JSON.stringify({ done: {}, failed: {}, current: { key: "shared-clip", path: "mdfit/videos/exercise-library/Exercise/Hips/Strength/shared-clip", at: "2026-11-15T09:29:55.000Z" } }));
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
+    siteUrl: f.base, noVideoSync: true, cloudinaryApiUrl: f.base, drivePublicUrl: f.base + "/public?id=" });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (m, u, b, tok) => { const r = await fetch(base + u, { method: m, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const adm = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+  const finish = async () => { let st; for (let i = 0; i < 200; i++) { st = (await call("GET", "/api/admin/videos/status", undefined, adm)).body; if (st.job && st.job.finishedAt) break; await new Promise((r) => setTimeout(r, 50)); } return st; };
+  const uploaded = () => f.seen.cloudinary.map((x) => x.public_id);
+
+  // An ordinary run: the clip that was being copied when the server died is not touched, and says why
+  await call("POST", "/api/admin/videos/migrate", {}, adm);
+  let st = await finish();
+  assert.match(st.failed["shared-clip"], /server restarted while copying this file/);
+  assert.equal(uploaded().some((p) => /\/shared-clip$/.test(p)), false, "the clip that crashed the server was not tried again");
+  assert.ok(uploaded().some((p) => /pattern-1$/.test(p)), "everything else still goes up");
+  const saved = () => JSON.parse(fs.readFileSync(path.join(dataDir, "videos-testcloud.json"), "utf8"));
+  assert.equal(saved().crashed["shared-clip"], 1); assert.equal(saved().current, undefined, "nothing is left written down after a run that finished");
+
+  // "Retry failed" from the workspace is a person's choice: it is tried once more, and a success clears the strike
+  await call("POST", "/api/admin/videos/migrate", { retryFailed: true }, adm);
+  st = await finish();
+  assert.ok(uploaded().some((p) => /\/shared-clip$/.test(p)), "a person can retry it");
+  assert.equal(st.failed["shared-clip"], undefined); assert.equal(saved().crashed["shared-clip"], undefined);
+
+  // The host switch: VIDEO_SYNC=off is read into the config, and anything else leaves the sync on
+  const { loadConfig } = require("../server");
+  const keep = process.env.VIDEO_SYNC;
+  try {
+    process.env.VIDEO_SYNC = "off"; assert.equal(loadConfig().videoSyncOff, true);
+    process.env.VIDEO_SYNC = "on"; assert.equal(loadConfig().videoSyncOff, false);
+    delete process.env.VIDEO_SYNC; assert.equal(loadConfig().videoSyncOff, false);
+  } finally { if (keep === undefined) delete process.env.VIDEO_SYNC; else process.env.VIDEO_SYNC = keep; }
+});
+
+test("media sync: a file over the size limit is refused before it is fetched, with the size in the reason", async (t) => {
+  const f = await fakes(); t.after(f.close);
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sa = JSON.stringify({ client_email: "media@mdfit-test.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-v-"));
+  // the unshared clip is 128 bytes through the Drive API; with a 100-byte limit it must not be pulled onto the server
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
+    siteUrl: f.base, noVideoSync: true, cloudinaryApiUrl: f.base, driveApiUrl: f.base + "/drive", googleTokenUrl: f.base + "/token", drivePublicUrl: f.base + "/public?id=", googleServiceAccount: sa, mediaMaxBytes: 100 });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (m, u, b, tok) => { const r = await fetch(base + u, { method: m, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const adm = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+  await call("POST", "/api/admin/videos/migrate", {}, adm);
+  let st; for (let i = 0; i < 200; i++) { st = (await call("GET", "/api/admin/videos/status", undefined, adm)).body; if (st.job && st.job.finishedAt) break; await new Promise((r) => setTimeout(r, 50)); }
+  assert.match(st.failed["unshared-clip"], /Too large to copy through this server/);
+  assert.equal(f.seen.cloudinary.some((x) => x.multipart && /\/unshared-clip$/.test(x.public_id)), false, "its bytes never reached the upload");
+  assert.equal(st.failed["shared-clip"], undefined, "a clip that goes straight from its link is untouched");
+});
+
+test("cloudinary purge: every video's Cloudinary copy is deleted with a signed request and dropped from the map; images stay; runs once from CLOUDINARY_PURGE_VIDEOS", async (t) => {
+  const f = await fakes(); t.after(f.close);
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sa = JSON.stringify({ client_email: "media@mdfit-test.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-v-"));
+  const opts = { adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
+    siteUrl: f.base, noVideoSync: true, cloudinaryApiUrl: f.base, driveApiUrl: f.base + "/drive", googleTokenUrl: f.base + "/token", drivePublicUrl: f.base + "/public?id=", googleServiceAccount: sa };
+  const boot = async (extra = {}) => {
+    const app = createApp({ ...opts, ...extra });
+    const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const call = async (m, u, b, tok) => { const r = await fetch(base + u, { method: m, headers: { "content-type": "application/json", ...(tok ? { authorization: "Bearer " + tok } : {}) }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+    const adm = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+    return { server, call, adm };
+  };
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let a = await boot(); t.after(() => a.server.close());
+  await a.call("POST", "/api/admin/videos/migrate", {}, a.adm);
+  let st; for (let i = 0; i < 200; i++) { st = (await a.call("GET", "/api/admin/videos/status", undefined, a.adm)).body; if (st.job && st.job.finishedAt) break; await new Promise((r) => setTimeout(r, 50)); }
+  let map = (await a.call("GET", "/api/videos")).body.map;
+  assert.ok(map["shared-clip"] && map["unshared-clip"] && map["slash-pic"], "two videos and an image on Cloudinary before");
+  assert.equal((await a.call("POST", "/api/admin/videos/purge-cloudinary")).status, 401, "owner only");
+
+  const out = (await a.call("POST", "/api/admin/videos/purge-cloudinary", {}, a.adm)).body;
+  assert.equal(out.removed, 2); assert.equal(out.failed, 0); assert.ok(out.doneAt);
+  assert.deepEqual(f.seen.destroyed.map((x) => [x.type, x.public_id]).sort(), [["video", "mdfit/videos/exercise-library/Exercise/Hips/Strength/shared-clip"], ["video", "mdfit/videos/exercise-library/Exercise/Hips/Strength/unshared-clip"]]);
+  for (const x of f.seen.destroyed) { assert.equal(x.invalidate, "true"); assert.equal(x.api_key, "key"); assert.match(x.signature, /^[0-9a-f]{40}$/); }
+  map = (await a.call("GET", "/api/videos")).body.map;
+  assert.equal(map["shared-clip"], undefined); assert.equal(map["unshared-clip"], undefined);
+  assert.ok(map["slash-pic"], "images stay on Cloudinary");
+  assert.equal((await a.call("GET", "/api/admin/videos/status", undefined, a.adm)).body.cloudinaryPurge.removed, 2);
+  a.server.close();
+
+  // From the environment: a finished purge is not run again on the next start
+  const before = f.seen.destroyed.length;
+  a = await boot({ cloudinaryPurgeVideos: true, purgeDelayMs: 10 });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(f.seen.destroyed.length, before, "already done: nothing deleted again");
+  const { loadConfig } = require("../server");
+  const keep = process.env.CLOUDINARY_PURGE_VIDEOS;
+  try {
+    process.env.CLOUDINARY_PURGE_VIDEOS = "on"; assert.equal(loadConfig().cloudinaryPurgeVideos, true);
+    delete process.env.CLOUDINARY_PURGE_VIDEOS; assert.equal(loadConfig().cloudinaryPurgeVideos, false);
+  } finally { if (keep === undefined) delete process.env.CLOUDINARY_PURGE_VIDEOS; else process.env.CLOUDINARY_PURGE_VIDEOS = keep; }
+});
+
+test("cloudinary purge: CLOUDINARY_PURGE_VIDEOS runs it on start-up by itself", async (t) => {
+  const f = await fakes(); t.after(f.close);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-v-"));
+  fs.writeFileSync(path.join(dataDir, "videos-testcloud.json"), JSON.stringify({ failed: {}, done: {
+    clip: { pid: "mdfit/videos/x/clip", type: "video", version: 1, guid: "g-1", ready: true, provider: "both" },
+    old: { pid: "mdfit/videos/x/gone-already", type: "video", version: 1 },
+    pic: { pid: "mdfit/images/x/pic", type: "image", version: 1 } } }));
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
+    siteUrl: f.base, noVideoSync: true, cloudinaryApiUrl: f.base, cloudinaryPurgeVideos: true, purgeDelayMs: 10 });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  let rec = null;
+  for (let i = 0; i < 100 && !(rec && rec.doneAt); i++) { await new Promise((r) => setTimeout(r, 30)); try { rec = JSON.parse(fs.readFileSync(path.join(dataDir, "cloudinary-purge.json"), "utf8")); } catch {} }
+  assert.ok(rec && rec.doneAt, "ran on its own"); assert.equal(rec.removed, 1); assert.equal(rec.missing, 1, "a copy already gone counts as done");
+  const d = JSON.parse(fs.readFileSync(path.join(dataDir, "videos-testcloud.json"), "utf8"));
+  assert.deepEqual(d.done.clip, { type: "video", guid: "g-1", ready: true, provider: "bunny" }, "the Bunny copy is kept, the Cloudinary id is gone");
+  assert.equal(d.done.old, undefined, "no other copy: dropped, so the next sync takes it to Bunny");
+  assert.equal(d.done.pic.pid, "mdfit/images/x/pic", "images are not touched");
+  assert.equal(f.seen.destroyed.some((x) => /pic/.test(x.public_id)), false);
 });
