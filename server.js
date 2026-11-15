@@ -50,6 +50,8 @@ function loadConfig() {
     mfaForceOff: env("ADMIN_MFA") === "off",
     // VIDEO_SYNC=off: the six-hourly video copy does not start on its own (lib/videos.js); the workspace button still does
     videoSyncOff: /^(0|false|off|no)$/i.test(env("VIDEO_SYNC")),
+    // CLOUDINARY_PURGE_VIDEOS=on: delete every video from Cloudinary once, on start-up (lib/videos.js); images stay
+    cloudinaryPurgeVideos: /^(1|true|on|yes)$/i.test(env("CLOUDINARY_PURGE_VIDEOS")),
     tz: env("TZ_NAME", "America/New_York"),
     resendKey: env("RESEND_API_KEY"),
     resendUrl: env("RESEND_URL", "https://api.resend.com"),
