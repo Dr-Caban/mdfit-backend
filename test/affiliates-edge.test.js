@@ -250,6 +250,11 @@ test("affiliates edge: settings are bounded; adjustments are bounded; only the o
   const pat = await w.mine();
   assert.equal(pat.ledger.length, 1); assert.equal(pat.ledger[0].who, "Sam R.");
   assert.ok(!JSON.stringify(pat).includes("sam@example.com"), "an affiliate never sees who they referred beyond a first name and initial");
+  // The funnel: link opened -> joined -> paying for an eligible subscription now
+  const code = (await w.s.call("GET", "/api/me/referral", undefined, w.pat)).body.code;
+  await w.s.call("POST", "/api/referral/visit", { code }); await w.s.call("POST", "/api/referral/visit", { code: code.toLowerCase() });
+  const list = w.s.readJson("clients"); list.find((c) => c.id === w.S.id).membership = { tier: "member", until: "2026-12-02", stripeSubscriptionId: "sub_sam", status: "active" }; w.s.writeJson("clients", list);
+  assert.deepEqual((await w.mine()).funnel, { opened: 2, joined: 1, paying: 1 });
 });
 
 test("affiliates edge: with Stripe not configured nothing breaks; the member is told payouts aren't ready", async (t) => {
