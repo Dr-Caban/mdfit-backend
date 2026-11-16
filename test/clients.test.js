@@ -1043,7 +1043,7 @@ test("referral tracking: Copy and Share presses, link visits, codes typed after 
   fs.writeFileSync(f, JSON.stringify(list));
 
   // presses and a link visit
-  for (const type of ["copy", "copy", "share"]) assert.equal((await s.call("POST", "/api/me/referral/event", { type }, pat)).status, 200);
+  for (const type of ["copy", "copy", "share", "copy_link"]) assert.equal((await s.call("POST", "/api/me/referral/event", { type }, pat)).status, 200);
   assert.equal((await s.call("POST", "/api/me/referral/event", { type: "nope" }, pat)).status, 400);
   assert.equal((await s.call("POST", "/api/me/referral/event", { type: "copy" })).status, 401, "members only");
   assert.equal((await s.call("POST", "/api/referral/visit", { code })).status, 200, "no account needed to land on a link");
@@ -1068,9 +1068,9 @@ test("referral tracking: Copy and Share presses, link visits, codes typed after 
   const r = (await s.call("GET", "/api/admin/referrals?days=30", undefined, await s.adminToken())).body;
   assert.equal(r.totals.referredAllTime, 2);
   assert.deepEqual(r.recent.map((x) => [x.name, x.via]).sort(), [["Kim Ito", "email"], ["Sam Roe", "claim"]]);
-  assert.deepEqual(r.events.totals, { copies: 2, shares: 1, linkVisits: 1, linkVisitsUnknownCode: 0, unmatchedCodes: 2, claims: 1 }); // Lee's at sign-up and Sam's mistyped claim
+  assert.deepEqual(r.events.totals, { copies: 2, linkCopies: 1, shares: 1, linkVisits: 1, linkVisitsUnknownCode: 0, unmatchedCodes: 2, claims: 1 }); // Lee's at sign-up and Sam's mistyped claim
   assert.equal(r.events.members[0].member, "Pat Doe");
-  assert.deepEqual([r.events.members[0].copies, r.events.members[0].shares, r.events.members[0].linkVisits], [2, 1, 1]);
+  assert.deepEqual([r.events.members[0].copies, r.events.members[0].linkCopies, r.events.members[0].shares, r.events.members[0].linkVisits], [2, 1, 1, 1], "code copied, link copied, link shared, link opened");
   assert.equal(r.events.unmatched[0].code, "MDFIT-NOPE01"); assert.equal(r.events.unmatched[0].name, "Lee Poe");
   assert.deepEqual([r.events.unmatched[1].code, r.events.unmatched[1].via], ["MDFIT-NOPE00", "claim"]);
 

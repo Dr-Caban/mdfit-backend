@@ -257,6 +257,34 @@ test("affiliates edge: settings are bounded; adjustments are bounded; only the o
   assert.deepEqual((await w.mine()).funnel, { opened: 2, joined: 1, paying: 1 });
 });
 
+test("affiliates edge: embedded Stripe payouts get a fresh account session for the member's own account; no publishable key means the hosted page instead", async (t) => {
+  const w = await world(t, {}, { stripePublishableKey: "pk_test_public" });
+  const sessions = [];
+  w.f.fake.accountSessions = { create: async (p) => (sessions.push(p), { client_secret: "accs_secret_" + sessions.length }) };
+  const me = await w.mine();
+  assert.equal(me.stripe.embedded, true); assert.equal(me.stripe.publishableKey, "pk_test_public");
+  let r = await w.s.call("POST", "/api/me/affiliate/stripe/session", {}, w.pat);
+  assert.equal(r.status, 200); assert.deepEqual(r.body, { clientSecret: "accs_secret_1", publishableKey: "pk_test_public" });
+  assert.equal(sessions[0].account, "acct_pat", "only ever the member's own account");
+  const c = sessions[0].components;
+  assert.equal(c.account_onboarding.enabled, true); assert.equal(c.payouts.enabled, true); assert.equal(c.payouts.features.instant_payouts, true);
+  assert.equal(c.payouts.features.edit_payout_schedule, false); assert.equal(c.notification_banner.enabled, true); assert.equal(c.account_management.enabled, true);
+  // A member who hasn't joined gets nothing; the account is never created for them
+  assert.equal((await w.s.call("POST", "/api/me/affiliate/stripe/session", {}, w.sam)).status, 409);
+  assert.equal(sessions.length, 1);
+  // Stripe failing is a plain error, not a crash
+  w.f.fake.accountSessions.create = async () => { throw new Error("boom"); };
+  assert.equal((await w.s.call("POST", "/api/me/affiliate/stripe/session", {}, w.pat)).status, 502);
+});
+
+test("affiliates edge: no publishable key, no embedded session (the app falls back to Stripe's hosted page)", async (t) => {
+  const prev = process.env.STRIPE_PUBLISHABLE_KEY; delete process.env.STRIPE_PUBLISHABLE_KEY; t.after(() => { if (prev !== undefined) process.env.STRIPE_PUBLISHABLE_KEY = prev; });
+  const w = await world(t);
+  assert.equal((await w.mine()).stripe.embedded, false);
+  assert.equal((await w.s.call("POST", "/api/me/affiliate/stripe/session", {}, w.pat)).status, 503);
+  assert.equal((await w.s.call("POST", "/api/me/affiliate/stripe/onboard", {}, w.pat)).status, 200, "the hosted page still works");
+});
+
 test("affiliates edge: with Stripe not configured nothing breaks; the member is told payouts aren't ready", async (t) => {
   const s = await start({ stripeSecretKey: "", stripeClient: null }); t.after(s.close);
   const adm = await s.adminToken();
