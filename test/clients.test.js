@@ -1012,3 +1012,72 @@ test("wrong passwords are counted per account: another account's sign-in does no
   assert.equal((await s.call("POST", "/api/clients/login", { email: "pat@example.com", password: "pat-pass-123" })).status, 429, "locked even with the right password");
   assert.equal((await s.call("POST", "/api/clients/login", { email: "mallory@example.com", password: "mallory-pass-1" })).status, 200, "other accounts are not locked");
 });
+
+test("referral sign-ups: ledger entry, and the admin report counts them from the accounts", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await signup(s);
+  const code = (await s.call("GET", "/api/me/referral", undefined, a.body.token)).body.code;
+  await signup(s, { name: "Sam Roe", email: "sam@example.com", referralCode: code });
+  await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: "MDFIT-NOPE00" });
+  assert.equal((await s.call("GET", "/api/me/referral", undefined, a.body.token)).body.referrals, 1);
+  assert.equal((await s.call("GET", "/api/admin/referrals")).status, 401);
+  const r = await s.call("GET", "/api/admin/referrals?days=30", undefined, await s.adminToken());
+  assert.equal(r.status, 200);
+  assert.equal(r.body.totals.referredAllTime, 1);
+  assert.equal(r.body.totals.referrers, 1);
+  assert.equal(r.body.recent[0].name, "Sam Roe");
+  assert.equal(r.body.topReferrers[0].referrer, "Pat Doe");
+});
+
+test("referral tracking: Copy and Share presses, link visits, codes typed after signing up, unmatched codes, and the referrer keeps their own plan", async (t) => {
+  const s = await start(); t.after(s.close);
+  const pat = (await signup(s)).body.token;
+  let me = (await s.call("GET", "/api/me/referral", undefined, pat)).body;
+  const code = me.code;
+  assert.equal(me.referred, false); assert.equal(me.canClaim, true);
+
+  // Pat is on Premium; a referral must add a month, not drop Pat to Membership or lose the Stripe link
+  const f = path.join(s.dataDir, "clients.json");
+  let list = JSON.parse(fs.readFileSync(f, "utf8"));
+  list.find((c) => c.email === "pat@example.com").membership = { tier: "premium", since: "2026-11-01", until: "2099-01-01", stripeSubscription: "sub_made_up" };
+  fs.writeFileSync(f, JSON.stringify(list));
+
+  // presses and a link visit
+  for (const type of ["copy", "copy", "share", "copy_link"]) assert.equal((await s.call("POST", "/api/me/referral/event", { type }, pat)).status, 200);
+  assert.equal((await s.call("POST", "/api/me/referral/event", { type: "nope" }, pat)).status, 400);
+  assert.equal((await s.call("POST", "/api/me/referral/event", { type: "copy" })).status, 401, "members only");
+  assert.equal((await s.call("POST", "/api/referral/visit", { code })).status, 200, "no account needed to land on a link");
+  await s.call("POST", "/api/referral/visit", { code: "<script>" }); // not a code: ignored
+
+  // Sam signs up without the code (as with Google from another browser), then adds it in the app
+  const sam = (await signup(s, { name: "Sam Roe", email: "sam@example.com" })).body.token;
+  assert.equal((await s.call("POST", "/api/me/referral/claim", { code: "MDFIT-NOPE00" }, sam)).status, 404);
+  assert.equal((await s.call("POST", "/api/me/referral/claim", { code: code.toLowerCase() }, sam)).status, 200, "codes are not case-sensitive");
+  assert.equal((await s.call("POST", "/api/me/referral/claim", { code }, sam)).status, 409, "once only");
+  assert.equal((await s.call("GET", "/api/me/referral", undefined, sam)).body.canClaim, false);
+
+  // Lee types a code that belongs to nobody at sign-up
+  await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: "MDFIT-NOPE01" });
+  // Kim signs up with the code: counted as an email sign-up
+  await signup(s, { name: "Kim Ito", email: "kim@example.com", referralCode: code });
+
+  list = JSON.parse(fs.readFileSync(f, "utf8"));
+  const p = list.find((c) => c.email === "pat@example.com");
+  assert.equal(p.membership.tier, "premium"); assert.equal(p.membership.stripeSubscription, "sub_made_up"); assert.equal(p.membership.until, "2099-03-02");
+
+  const r = (await s.call("GET", "/api/admin/referrals?days=30", undefined, await s.adminToken())).body;
+  assert.equal(r.totals.referredAllTime, 2);
+  assert.deepEqual(r.recent.map((x) => [x.name, x.via]).sort(), [["Kim Ito", "email"], ["Sam Roe", "claim"]]);
+  assert.deepEqual(r.events.totals, { copies: 2, linkCopies: 1, shares: 1, linkVisits: 1, linkVisitsUnknownCode: 0, unmatchedCodes: 2, claims: 1 }); // Lee's at sign-up and Sam's mistyped claim
+  assert.equal(r.events.members[0].member, "Pat Doe");
+  assert.deepEqual([r.events.members[0].copies, r.events.members[0].linkCopies, r.events.members[0].shares, r.events.members[0].linkVisits], [2, 1, 1, 1], "code copied, link copied, link shared, link opened");
+  assert.equal(r.events.unmatched[0].code, "MDFIT-NOPE01"); assert.equal(r.events.unmatched[0].name, "Lee Poe");
+  assert.deepEqual([r.events.unmatched[1].code, r.events.unmatched[1].via], ["MDFIT-NOPE00", "claim"]);
+
+  // after 30 days the door closes
+  list = JSON.parse(fs.readFileSync(f, "utf8"));
+  list.find((c) => c.email === "lee@example.com").createdAt = "2026-01-01T00:00:00.000Z";
+  fs.writeFileSync(f, JSON.stringify(list));
+  const lee = (await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "pat-pass-123" })).body.token;
+  assert.equal((await s.call("POST", "/api/me/referral/claim", { code }, lee)).status, 400);
+});

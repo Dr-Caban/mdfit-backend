@@ -221,6 +221,7 @@ Read via `env(k, default)` in `loadConfig()` (`server.js:34-69`) unless noted. "
 | `LEADERBOARD_PACERS` | `off` disables synthetic leaderboard pacers (default on) | opt | `lib/clients.js:584` |
 | `MIN_IOS_BUILD` | Oldest supported iOS build reported by `/api/app/config` (default 1) | opt | `server.js:603` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` / `silent` (default info) | opt | `lib/logger.js:6` |
+| `LOG_KEEP_DAYS` | Days of structured log lines kept on the volume in `DATA_DIR/logs` (default 90, 7 to 365). Railway itself keeps 7. Read at `/api/admin/logs`, `/logs/summary`, `/logs/days`, `/logs/download` | opt | `lib/activity-log.js` |
 | `NODE_ENV` | Tests refuse to run when `production` | — | `test/*.js` |
 
 Test-only `cfg` overrides (not env): `cfg.now`, `cfg.calsync`, `cfg.stripeClient`, `cfg.stripeSecretKey`, `cfg.stripeWebhookSecret`, `cfg.noVideoSync`.

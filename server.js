@@ -21,6 +21,7 @@ const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
 const clientOf = (store, a) => (a && a.clientId ? store.read("clients", []).find((c) => c.id === a.clientId) || null : null);
 const { mountFeedbackReports } = require("./lib/feedback-reports");
 const { mountAnalytics } = require("./lib/analytics");
+const { createActivityLog, mountActivityLog } = require("./lib/activity-log");
 const { mountVideos } = require("./lib/videos");
 const { mountSearch } = require("./lib/search");
 const { createRealtime } = require("./lib/realtime");
@@ -171,6 +172,13 @@ function createApp(cfg = loadConfig()) {
   // Free-text health notes (visit notes, pain diary, plan, consult messages, reviews) are field-encrypted as well,
   // with the same key as messages, so they're unreadable even in a store that has no DATA_ENC_KEY.
   const store = phiStore(createStore(cfg.dataDir, { key: cfg.dataKey }), cipher([process.env.MESSAGE_ENC_KEY, cfg.sessionSecret]));
+  // Activity log on the volume: every structured log line, kept LOG_KEEP_DAYS (default 90) because Railway keeps 7.
+  // Encrypted with DATA_ENC_KEY, or the session secret when that isn't set, so it is never plain text on disk.
+  const activityLog = createActivityLog({ dir: path.join(cfg.dataDir, "logs"), key: cfg.dataKey || cfg.sessionSecret,
+    keepDays: Math.max(7, Math.min(365, Number(process.env.LOG_KEEP_DAYS) || 90)), now: cfg.now || (() => new Date()) });
+  // Once-a-minute heartbeats are not activity and would be most of the file; errors on them are still kept.
+  const HEARTBEAT = /"msg":"request".*"path":"\/api\/me\/(presence|messages\/unread-count)","status":[23]/;
+  logger.tee = (line) => { if (!HEARTBEAT.test(line)) activityLog.append(line); };
   // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
   const EMAIL_LOG_DAYS = 60, EMAIL_LOG_FAILS = 50;
   function logEmail(r) {
@@ -1520,6 +1528,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/custom-workouts").mountCustomWorkouts({ store, activity, ...cl }); // workout builder + member challenges
   require("./lib/shares").mountShares({ app, store, limiter, me: cl.me, clients: cl.clients, save: cl.save }); // share a saved program or workout by link
   mountAnalytics({ app, admin, store, limiter });
+  mountActivityLog({ admin, log: activityLog });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
   admin.get("/email-log", (req, res) => {
     const d = store.read("email-log", { days: {}, failures: [] });
@@ -1539,6 +1548,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   mountVideos({ app, admin, store, cfg, logger: typeof logger !== "undefined" ? logger : null });
   mountSearch({ app, admin, store, limiter, logger: typeof logger !== "undefined" ? logger : null });
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });
+  // Affiliate commissions on subscriptions (lib/affiliates.js): the webhook in lib/payments.js hands it paid invoices,
+  // refunds and Express account changes through app.get("affiliates")
+  require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
   // A patient scheduling and paying for their own video visit (Medical record). The slot is held while Stripe takes the
   // payment, so two patients can never land on the same time, and a checkout nobody finishes lets the hold lapse.
