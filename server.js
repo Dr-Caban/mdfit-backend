@@ -1551,6 +1551,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // Affiliate commissions on subscriptions (lib/affiliates.js): the webhook in lib/payments.js hands it paid invoices,
   // refunds and Express account changes through app.get("affiliates")
   require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl });
+  // The revenue ledger and the manager's revenue share (Agreement Section 4); /api/admin/partner* screens
+  require("./lib/partner-share").mountPartnerShare({ app, admin, store, cfg, logger, audit, notify, clients: cl.clients, staff });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
   // A patient scheduling and paying for their own video visit (Medical record). The slot is held while Stripe takes the
   // payment, so two patients can never land on the same time, and a checkout nobody finishes lets the hold lapse.
