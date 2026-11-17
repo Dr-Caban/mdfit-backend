@@ -1531,13 +1531,13 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
   // Achievements (a new gem, a badge, the daily goal), the evening streak nudge, and group-class reminders.
   // One sweep, every minute; everything it sends is recorded so nothing goes out twice.
-  // Also Sunny's one daily nudge (comebacks, new picks, the Sarasota-sunlight morning line): lib/nudges.js.
+  // Also Solomon's one daily nudge (comebacks, new picks, the Sarasota-sunlight morning line): lib/nudges.js.
   const nudges = require("./lib/nudges").createNudges({
     store, clients: cl.clients, save: cl.save, push, rewardsOf: cl.rewardsOf,
     nowParts, zonedToUtc, prettyTime, tz: cfg.tz, now: cfg.now, logger,
     pushedOn: (id) => (push.pushedOn ? push.pushedOn(id) : ""), fetchImpl: cfg.nudgeWeather === false ? null : undefined
   });
-  // What Sunny's nudges did, for the owner (Insights -> Sunny): sent, opened within 6 hours, came back within 2 days
+  // What Solomon's nudges did, for the owner (Insights -> Solomon): sent, opened within 6 hours, came back within 2 days
   admin.get("/guide/nudges", (req, res) => res.json(nudges.stats(req.query.days)));
   app.set("nudge", () => {
     try {
@@ -1653,7 +1653,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
-  // Sunny in the member app: tokens counted per day on the server (unlimited with full access:
+  // Solomon in the member app: tokens counted per day on the server (unlimited with full access:
   // membership, active treatment plan or in-clinic patient), suggestions kept for Home, reminders, looks, the owner's numbers
   // (AI answers reuse the scribe's connection and only run on a service that signs a business associate agreement: lib/guide-ai.js)
   const guideAI = require("./lib/guide-ai").createGuideAI({ cfg, store, logger });
