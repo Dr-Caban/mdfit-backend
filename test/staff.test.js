@@ -502,3 +502,39 @@ test("manager and developer accounts can never reach patient data, whoever asks;
   const adm = await s.makeStaff({ email: "office@example.com", role: "admin" });
   assert.equal(adm.record.permissions.includes("partner"), false); assert.equal(adm.record.permissions.includes("payouts"), false);
 });
+
+// ---------------------------------------------------------------- Sign in with Google (owner and staff)
+
+test("Sign in with Google: the owner's address and active staff accounts get in; anyone else, an unverified email or a bad token does not", async (t) => {
+  const tokens = {
+    owner: { email: OWNER.toUpperCase(), email_verified: true },
+    josh: { email: "josh@example.com", email_verified: true },
+    stranger: { email: "someone@example.com", email_verified: true },
+    unverified: { email: "josh@example.com", email_verified: false },
+    off: { email: "gone@example.com", email_verified: true }
+  };
+  const s = await start({ googleClientId: "gid.apps.googleusercontent.com", verifyGoogleToken: async (cred, aud) => { assert.equal(aud, "gid.apps.googleusercontent.com"); if (!tokens[cred]) throw new Error("Invalid signature"); return tokens[cred]; } });
+  t.after(s.close);
+  const g = (credential) => s.call("POST", "/api/admin/login/google", { credential });
+  // The owner, by the address in ADMIN_EMAIL (case doesn't matter)
+  let r = await g("owner");
+  assert.equal(r.status, 200);
+  assert.equal((await s.call("GET", "/api/admin/me", undefined, r.body.token)).body.isOwner, true);
+  // A staff account the owner made: same permissions as a password sign-in
+  await s.makeStaff({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
+  r = await g("josh");
+  assert.equal(r.status, 200);
+  const me = (await s.call("GET", "/api/admin/me", undefined, r.body.token)).body;
+  assert.equal(me.role, "manager"); assert.equal(me.permissions.includes("charts"), false);
+  // Nobody else; Google never creates an account
+  assert.equal((await g("stranger")).status, 403);
+  assert.equal((await g("unverified")).status, 401);
+  assert.equal((await g("forged")).status, 401);
+  assert.equal((await g("")).status, 400);
+  // A switched-off staff account can't come back in through Google
+  const gone = await s.makeStaff({ name: "Gone", email: "gone@example.com", role: "frontdesk" });
+  assert.equal((await g("off")).status, 200);
+  const tok = await s.ownerToken();
+  assert.equal((await s.call("DELETE", `/api/admin/staff/${gone.record.id}`, undefined, tok)).status, 200);
+  assert.equal((await g("off")).status, 403);
+});

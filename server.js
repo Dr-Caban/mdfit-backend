@@ -940,6 +940,11 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       logger.warn("login_failed", { email: mask(email || "-") });
       return res.status(401).json({ error: "Wrong email or password." });
     }
+    finishLogin(req, res, { email, isOwner, person, via: "password" });
+  });
+  // The rest of a sign-in, whichever way the person proved who they are: the emailed code when two-step sign-in is
+  // on, then the session.
+  function finishLogin(req, res, { email, isOwner, person, via }) {
     if (mfaOn()) {
       if (!req.body.code) {
         emailCode("login", email);
@@ -956,9 +961,35 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     emailFails.reset(email);
     const exp = Date.now() + SESSION_HOURS * 3600e3;
     if (!isOwner) { staff.noteLogin(person.id); req.loginActor = `admin:${email}`; }
-    activity("login", { email, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
+    activity("login", { email, via, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
     const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", exp };
     res.json({ token: signToken(payload, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
+  }
+  // Sign in with Google for the owner and staff (the workspace at /admin and the manager's console at /manager).
+  // Google proves the address; it must be the owner's ADMIN_EMAIL or an active staff account's email, verified by
+  // Google. It never creates an account, and two-step sign-in still applies.
+  app.post("/api/admin/login/google", async (req, res) => {
+    if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
+    const clientId = process.env.GOOGLE_CLIENT_ID || cfg.googleClientId || "";
+    if (!clientId) return res.status(501).json({ error: "Google sign-in is not configured." });
+    if (loginFails.blocked(req.ip)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const credential = String((req.body && req.body.credential) || "");
+    if (!credential) return res.status(400).json({ error: "Missing Google credential." });
+    let g;
+    try { g = await (cfg.verifyGoogleToken || cl.verifyGoogleToken)(credential, clientId); }
+    catch (e) { loginFails.hit(req.ip); logger.warn("admin_google_failed", { error: e.message }); return res.status(401).json({ error: "Google sign-in failed. Try again." }); }
+    const email = String(g.email || "").trim().toLowerCase();
+    if (!email || g.email_verified !== true && g.email_verified !== "true") { loginFails.hit(req.ip); return res.status(401).json({ error: "That Google account has no verified email." }); }
+    if (emailFails.blocked(email)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const isOwner = email === cfg.adminEmail;
+    const rec = isOwner ? null : staff.byEmail(email);
+    const person = isOwner ? { id: "", email } : rec && rec.active === true ? rec : null;
+    if (!person) {
+      loginFails.hit(req.ip); emailFails.hit(email);
+      logger.warn("admin_google_no_account", { email: mask(email) });
+      return res.status(403).json({ error: `${email} isn't the owner or a staff account. Sign in with the Google account the owner added, or with your password.` });
+    }
+    finishLogin(req, res, { email, isOwner, person, via: "google" });
   });
 
   const admin = express.Router();
