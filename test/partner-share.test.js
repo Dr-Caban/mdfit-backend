@@ -33,7 +33,7 @@ async function start(t) {
   let clock = new Date("2026-11-20T15:00:00Z");
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-share-"));
   const app = createApp({ adminEmail: "jared@example.com", adminPasswordHash: hashPassword("owner-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York",
-    siteUrl: "https://mdfit.example.com", noVideoSync: true, noAffiliateJobs: true, stripeClient: f.fake, stripeSecretKey: "rk_test_x", stripeWebhookSecret: WHSEC, stripePublishableKey: "pk_test_public", now: () => clock });
+    siteUrl: "https://mdfit.example.com", noVideoSync: true, noAffiliateJobs: true, stripeClient: f.fake, stripeSecretKey: "rk_test_x", stripeWebhookSecret: WHSEC, stripePublishableKey: "pk_test_public", managerEmail: "josh@example.com", now: () => clock });
   const server = app.listen(0); await new Promise((r) => server.once("listening", r));
   t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -58,9 +58,14 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   const s = await start(t);
   const mgr = await s.staffLogin({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
   const dev = await s.staffLogin({ name: "Dev Person", email: "dev@example.com", role: "developer" });
-  // Not set up: the manager's console says whose it is; the developer never gets in; settings are the owner's
-  assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, mgr.token)).status, 403);
+  // The console is one person's (MANAGER_EMAIL): not the developer, not another Manager account, not even the owner
+  const r0 = await s.call("GET", "/api/admin/partner/share", undefined, mgr.token);
+  assert.equal(r0.status, 200); assert.equal(r0.body.enabled, false, "the manager sees it isn't switched on yet");
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, dev.token)).status, 403);
+  const other = await s.staffLogin({ name: "Other Manager", email: "other@example.com", role: "manager" });
+  assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, other.token)).status, 403);
+  assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, s.owner)).status, 403);
+  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { managerStaffId: other.id }, s.owner)).status, 400, "the share can only go to the MANAGER_EMAIL account");
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, mgr.token)).status, 403, "the manager can't set their own share");
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { managerStaffId: dev.id }, s.owner)).status, 400, "only a Manager account can hold the share");
   let r = await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, s.owner);
