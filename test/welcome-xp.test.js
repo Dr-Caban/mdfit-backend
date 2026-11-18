@@ -71,6 +71,13 @@ test("first descent: five stops, 10 XP each once ever, the checkable ones must b
   await call("POST", "/api/me/workouts", { title: "First", minutes: 20, exercises: 4 });
   assert.equal((await call("POST", "/api/me/xp", { kind: "intro", ref: "session" })).body.first, true);
   assert.equal((await call("GET", "/api/me/intro")).body.offered, true, "started, so still offered with a workout logged");
+  // One stop passed over: no XP, the road can still finish, and doing it later still pays
+  const before = await xp();
+  const passed = (await call("POST", "/api/me/intro/skip", { ref: "program" })).body;
+  assert.equal(passed.steps.program, "skipped"); assert.equal(passed.offered, true); assert.equal(await xp(), before);
+  await call("POST", "/api/me/intro/skip", { ref: "pain" }); await call("POST", "/api/me/intro/skip", { ref: "friend" });
+  assert.equal((await call("GET", "/api/me/intro")).body.done, true, "every stop done or passed: finished");
+  assert.equal((await call("POST", "/api/me/xp", { kind: "intro", ref: "friend" })).body.xp, 10, "a passed stop still pays when it is done later");
   assert.equal((await call("POST", "/api/me/intro/skip", { skip: true })).body.offered, false);
   assert.equal((await call("POST", "/api/me/intro/skip", { skip: false })).body.offered, true, "replay");
 });
