@@ -15,11 +15,12 @@ function setup({ client, charges = [], invoices = [], links = [] } = {}) {
     emrApi: { chartOf: () => ({ clinic: { invoices } }) },
     invoiceLinks: { all: () => links }
   };
-  const app = { get: (k) => vals[k], set: (k, v) => { vals[k] = v; } };
-  const me = { get: (p, fn) => { routes[p] = fn; } };
-  const api = mountMemberCalendar({ app, me, store, clients: () => people, tiers: () => [{ id: "member", name: "MD Fit Membership" }], debounceMs: 0 });
+  const app = { get: (k, fn) => { if (fn) { routes[k] = fn; return; } return vals[k]; }, set: (k, v) => { vals[k] = v; } };
+  const me = { get: (p, fn) => { routes[p] = fn; }, post: (p, fn) => { routes["POST " + p] = fn; } };
+  const api = mountMemberCalendar({ app, me, store, clients: () => people, save: () => {}, tiers: () => [{ id: "member", name: "MD Fit Membership" }], debounceMs: 0,
+    cfg: { siteUrl: "https://www.mymdfit.com", tz: "America/New_York" }, zonedToUtc: (d, t) => new Date(`${d}T${t}:00-05:00`) });
   const call = async () => { let out; await routes["/calendar"]({ client: client }, { set() {}, json: (x) => { out = x; } }); return out.entries; };
-  return { store, sent, api, call, app };
+  return { store, sent, api, call, app, routes, data, people };
 }
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
@@ -86,4 +87,44 @@ test("calendar: calendarChanged is shared on the app and debounces per member", 
   cc("c1", "workout"); cc("c1", "workout"); cc(null);
   await tick();
   assert.deepEqual(sent, [["c1", "calendar_changed", "workout"]]);
+});
+
+test("calendar feed: a private link for the phone's calendar, titles only, and a new link retires the old", async () => {
+  const client = { id: "c1", email: "a@example.com", emailVerifiedAt: "2026-01-01",
+    membership: { tier: "member", since: "2026-10-03", until: "2026-12-03", stripeSubscriptionId: "sub_1", status: "active" } };
+  const { routes, data, store } = setup({ client, invoices: [{ id: "i1", number: "INV-1001", date: "2026-11-16", amount: 12000, status: "unpaid", description: "Dry needling, left shoulder" }] });
+  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10), old = new Date(Date.now() - 200 * 864e5).toISOString().slice(0, 10);
+  store.write("appointments", [
+    { id: "a1", clientId: "c1", date: soon, time: "15:00", minutes: 30, typeName: "Dry needling follow-up", status: "booked" },
+    { id: "a2", clientId: "c1", date: soon, time: "09:00", typeName: "Video consult", typeId: "telehealth", status: "booked" },
+    { id: "a3", clientId: "c1", date: soon, time: "11:00", typeName: "Eval", status: "cancelled" },
+    { id: "a4", clientId: "c1", date: old, time: "11:00", typeName: "Eval", status: "booked" },
+    { id: "a5", clientId: "c2", date: soon, time: "12:00", typeName: "Someone else", status: "booked" }]);
+  data.classes = [{ id: "k1", title: "Mobility, Core; Breath", time: "18:00", durationMin: 45 }];
+  store.write("bookings", [{ id: "b1", classId: "k1", email: "A@example.com", date: soon }]);
+  const json = async (fn, req) => { let out; await fn(req, { set() {}, json: (x) => { out = x; } }); return out; };
+  const link = await json(routes["/calendar/feed"], { client });
+  assert.match(link.url, /^https:\/\/www\.mymdfit\.com\/api\/calendar-feed\/[a-f0-9]{48}\.ics$/);
+  assert.equal(link.webcal, link.url.replace("https:", "webcal:"));
+  assert.equal((await json(routes["/calendar/feed"], { client })).url, link.url, "the same link until it is reset");
+  const get = async (file) => { const r = { status: 200, type: "", body: "" }; await routes["/api/calendar-feed/:file"]({ params: { file } }, { set() { return this; }, status(n) { r.status = n; return this; }, type(t) { r.type = t; return this; }, send(b) { r.body = b; } }); return r; };
+  const token = link.url.split("/").pop();
+  const r = await get(token);
+  assert.equal(r.status, 200); assert.match(r.type, /text\/calendar/);
+  const body = r.body;
+  assert.ok(body.startsWith("BEGIN:VCALENDAR\r\n") && body.endsWith("END:VCALENDAR\r\n"));
+  assert.ok(body.split("\r\n").every((l) => Buffer.byteLength(l) <= 75), "lines folded");
+  assert.match(body, /SUMMARY:MD Fit visit\r\n/); assert.match(body, /SUMMARY:MD Fit video visit\r\n/);
+  assert.match(body, new RegExp(`DTSTART:${soon.replace(/-/g, "")}T200000Z`), "15:00 Eastern in UTC");
+  assert.match(body, /SUMMARY:MD Fit class: Mobility\\, Core\\; Breath/);
+  assert.match(body, /SUMMARY:MD Fit invoice INV-1001: \$120\.00 \(unpaid\)/);
+  assert.match(body, /SUMMARY:MD Fit Membership renews\r\n/); assert.match(body, /SUMMARY:MD Fit Membership started\r\n/);
+  assert.equal((body.match(/BEGIN:VEVENT/g) || []).length, 6, "2 visits, 1 class, 1 invoice, membership start and renewal: no cancelled, old or other people's visits");
+  for (const secret of ["Dry needling", "shoulder", "Someone else", "follow-up", "Video consult"]) assert.ok(!body.includes(secret), `no "${secret}"`);
+  // A new link: the old one stops working
+  const fresh = await json(routes["POST /calendar/feed/reset"], { client });
+  assert.notEqual(fresh.url, link.url);
+  assert.equal((await get(token)).status, 404);
+  assert.equal((await get(fresh.url.split("/").pop())).status, 200);
+  assert.equal((await get("../../etc/passwd")).status, 404);
 });
