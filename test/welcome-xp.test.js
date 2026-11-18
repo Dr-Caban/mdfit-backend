@@ -38,6 +38,35 @@ test("welcome back: +5 XP once a day, flagged first only the first time", async 
   assert.equal(await xpToday(), before + 5, "and earns nothing more");
 });
 
+test("arrival: the first opening of a day says how long they were away and whether it is earlier than they usually train", async (t) => {
+  let now = new Date("2026-11-02T15:00:00Z");
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-"));
+  const server = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("test-pass-123"), sessionSecret: "s".repeat(40),
+    dataDir, origins: ["https://mdfit.example.com"], tz: "America/New_York", now: () => now }).listen(0);
+  t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let token = "";
+  const call = async (method, url, body) => {
+    const res = await fetch(base + url, { method, headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: res.status, body: await res.json().catch(() => undefined) };
+  };
+  token = (await call("POST", "/api/clients/signup", { name: "Pat Doe", email: "pat@example.com", phone: "941-555-0100", password: "test-pass-123" })).body.token;
+  const open = async () => (await call("POST", "/api/me/xp", { kind: "open" })).body;
+  const a = await open();
+  assert.deepEqual(a.arrive, { away: null, usual: null, hour: 10 }, "a brand-new member has no day to have missed");
+  assert.equal((await open()).arrive, undefined, "only the first opening of the day carries it");
+  now = new Date("2026-11-03T15:00:00Z"); assert.equal((await open()).arrive.away, 1, "here yesterday");
+  now = new Date("2026-11-05T15:00:00Z"); assert.equal((await open()).arrive.away, 2, "missed a day");
+  // Three sessions at about 5 PM: an opening at 7 AM is earlier than usual
+  const f = path.join(dataDir, "clients.json"), all = JSON.parse(fs.readFileSync(f, "utf8")), me = all.find((c) => c.email === "pat@example.com");
+  me.workouts = ["2026-11-06", "2026-11-07", "2026-11-08"].map((d, i) => ({ id: "w" + i, date: d, title: "Session", minutes: 20, exercises: 4, completedAt: d + "T22:1" + i + ":00Z" }));
+  fs.writeFileSync(f, JSON.stringify(all));
+  now = new Date("2026-11-09T12:00:00Z");
+  assert.deepEqual((await open()).arrive, { away: 1, usual: 17, hour: 7 });
+  now = new Date("2026-11-20T12:00:00Z"); assert.equal((await open()).arrive.away, 11, "back after a while");
+});
+
 test("welcome back counts once per day in the XP total", () => {
   const r = rewards({ actions: [{ date: "2026-11-02", kind: "open" }, { date: "2026-11-02", kind: "open" }, { date: "2026-11-03", kind: "open" }] }, "2026-11-03");
   assert.equal(r.xp >= 10, true);
