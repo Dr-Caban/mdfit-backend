@@ -604,7 +604,7 @@ function createApp(cfg = loadConfig()) {
       if (payload.role !== "staff") return again();
       const rec = staff.byEmail(email);
       if (!rec || rec.active !== true) return again();
-      req.account = { isOwner: false, id: rec.id, email: rec.email, name: rec.name, role: rec.role, permissions: [...(rec.permissions || [])], mustChangePassword: !!rec.mustChangePassword };
+      req.account = { isOwner: false, id: rec.id, email: rec.email, name: rec.name, role: rec.role, roles: Array.isArray(rec.roles) && rec.roles.length ? [...rec.roles] : [rec.role], permissions: [...(rec.permissions || [])], mustChangePassword: !!rec.mustChangePassword };
     }
     req.admin = req.account.email; // kept for the audit middleware and every existing handler
     next();
@@ -999,7 +999,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   admin.get("/me", (req, res) => {
     const a = req.account;
     res.json({
-      id: a.id, email: a.email, name: a.name, role: a.role, permissions: [...a.permissions], isOwner: a.isOwner,
+      id: a.id, email: a.email, name: a.name, role: a.role, roles: a.roles || (a.role ? [a.role] : []), permissions: [...a.permissions], isOwner: a.isOwner,
       mustChangePassword: !a.isOwner && !!a.mustChangePassword,
       emailNotifications: notify.enabled, mfa: mfaOn()
     });

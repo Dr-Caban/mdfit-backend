@@ -538,3 +538,32 @@ test("Sign in with Google: the owner's address and active staff accounts get in;
   assert.equal((await s.call("DELETE", `/api/admin/staff/${gone.record.id}`, undefined, tok)).status, 200);
   assert.equal((await g("off")).status, 403);
 });
+
+// ---------------------------------------------------------------- several roles at once
+
+test("several roles: a person gets what all their roles turn on, roles that clash can't be combined, and old one-role accounts still work", async (t) => {
+  const s = await start(); t.after(s.close);
+  const tok = await s.ownerToken();
+  // Clinician + Front desk: both presets together
+  let r = await s.call("POST", "/api/admin/staff", { name: "Ana Both", email: "ana@example.com", roles: ["clinician", "frontdesk"], password: "staff-pass-1234" }, tok);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.staff.roles, ["clinician", "frontdesk"]); assert.equal(r.body.staff.role, "clinician");
+  for (const p of ["charts", "clients", "scheduling", "messages", "content", "reviews"]) assert.ok(r.body.staff.permissions.includes(p), p);
+  const ana = r.body.staff;
+  const me = (await s.call("GET", "/api/admin/me", undefined, (await s.login("ana@example.com", "staff-pass-1234")).body.token)).body;
+  assert.deepEqual(me.roles, ["clinician", "frontdesk"]);
+  // Roles that clash are refused with the reason (Section 11.2: a Manager never holds patient records)
+  for (const roles of [["manager", "clinician"], ["manager", "admin"], ["manager", "developer"], ["developer", "frontdesk"]]) {
+    r = await s.call("POST", "/api/admin/staff", { name: "X", email: `x${roles.join("")}@example.com`, roles, password: "staff-pass-1234" }, tok);
+    assert.equal(r.status, 400, roles.join("+")); assert.match(r.body.error, /can't be combined/);
+  }
+  assert.equal((await s.call("POST", "/api/admin/staff", { name: "X", email: "none@example.com", roles: [], password: "staff-pass-1234" }, tok)).status, 400);
+  assert.equal((await s.call("POST", "/api/admin/staff", { name: "X", email: "own@example.com", roles: ["owner"], password: "staff-pass-1234" }, tok)).status, 400);
+  // Changing roles resets the permissions to the new combination; adding a clashing role is refused
+  r = await s.call("PUT", `/api/admin/staff/${ana.id}`, { roles: ["frontdesk", "admin"] }, tok);
+  assert.equal(r.status, 200); assert.deepEqual(r.body.staff.roles, ["frontdesk", "admin"]); assert.equal(r.body.staff.permissions.includes("charts"), false);
+  assert.equal((await s.call("PUT", `/api/admin/staff/${ana.id}`, { roles: ["frontdesk", "manager"] }, tok)).status, 400);
+  // The one-role form still works, and reads back as a list
+  r = await s.call("POST", "/api/admin/staff", { name: "Old Style", email: "old@example.com", role: "frontdesk", password: "staff-pass-1234" }, tok);
+  assert.deepEqual(r.body.staff.roles, ["frontdesk"]);
+});
