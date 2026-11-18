@@ -236,9 +236,14 @@ test("guide: the owner's numbers add up, day by day, and count who upgraded afte
   const late = (await s.call("GET", u + "?days=7", undefined, A)).body; assert.equal(late.totals.limitPeople, 0); assert.equal(late.rate, null);
   assert.equal((await s.call("GET", u + "?days=30", undefined, A)).body.totals.upgraded, 1);
 
-  // a deleted account takes its counters with it
+  // a deleted account takes its counters with it - once the trash has emptied. For the 30 days it can still be
+  // restored, they stay, so a restore brings the account back exactly as it was.
   assert.equal((await s.call("DELETE", `/api/admin/clients/${bob.client.id}`, undefined, A)).status, 200);
+  assert.equal(JSON.stringify(s.file("guide")).includes(bob.client.id), true, "still there while it can be restored");
+  s.at("2026-12-26T15:00:00Z");
+  assert.equal((await s.call("GET", "/api/admin/clients/trash/list", undefined, A)).body.trash.length, 0, "the trash has emptied");
   assert.equal(JSON.stringify(s.file("guide")).includes(bob.client.id), false);
+  s.at("2026-11-25T15:00:00Z");
   const after = (await s.call("GET", u + "?days=30", undefined, A)).body;
   assert.equal(after.totals.limitPeople, 1); assert.equal(after.totals.upgraded, 1); assert.equal(after.rate, 1);
 });
