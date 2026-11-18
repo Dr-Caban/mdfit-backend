@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MD Fit valuation workbench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#eef1f4; --sheet:#f8fafb; --ink:#14213d; --ink2:#4a5874; --rule:#cfd6df; --rule2:#e1e6ec;
+    --brand:#ff7a00; --income:#1f7a7a; --market:#4a6fa5; --asset:#8a8f3a; --neg:#b4473b;
+    --focus:#4a6fa5;
+    --f:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --paper:#0e1726; --sheet:#142035; --ink:#e6ecf2; --ink2:#9fb0c6; --rule:#2a3a55; --rule2:#1f2d45;
+      --income:#3fb4b0; --market:#7fa3dc; --asset:#c3c86a; --neg:#ef8a7c; --focus:#7fa3dc; }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);font:400 15px/1.5 var(--f);font-variant-numeric:tabular-nums}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
+  a{color:inherit}
+
+  .top{max-width:1320px;margin:0 auto;padding:28px 24px 0;display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  .top h1{margin:0;font-stretch:118%;font-weight:750;font-size:clamp(24px,3.2vw,34px);letter-spacing:-.015em;line-height:1.05}
+  .top p{margin:6px 0 0;color:var(--ink2);max-width:62ch;font-size:14px}
+  .brandmark{display:inline-block;width:12px;height:12px;background:var(--brand);border-radius:2px;margin-right:10px;vertical-align:4px}
+  .basis{font-size:13px;color:var(--ink2);text-align:right}
+  .basis b{color:var(--ink);font-weight:600}
+
+  .shell{max-width:1320px;margin:0 auto;padding:20px 24px 80px;display:grid;grid-template-columns:280px minmax(0,1fr);gap:28px}
+  @media (max-width:900px){ .shell{grid-template-columns:minmax(0,1fr);padding:16px 14px 60px;gap:18px} .top{padding:20px 14px 0} }
+
+  /* process rail: the steps, each with its own running result */
+  .rail{position:sticky;top:16px;align-self:start;max-height:calc(100vh - 32px);overflow:auto;padding-right:4px}
+  @media (max-width:900px){ .rail{position:static;max-height:none} }
+  .rail h2{font-stretch:110%;font-size:15px;font-weight:700;margin:0 0 2px}
+  .rail .lead{font-size:12.5px;color:var(--ink2);margin:0 0 14px}
+  .rail ol{list-style:none;margin:0;padding:0}
+  .rail li{display:grid;grid-template-columns:26px 1fr;gap:0 10px;padding:8px 0;border-top:1px solid var(--rule2)}
+  .rail li:first-child{border-top:0}
+  .rail .n{grid-row:span 3;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--rule);display:grid;place-items:center;font-size:11.5px;font-weight:700;color:var(--ink2);margin-top:1px}
+  .rail li.on .n{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+  .rail a{font-weight:600;font-size:14px;text-decoration:none;line-height:1.3}
+  .rail a:hover{text-decoration:underline;text-underline-offset:3px}
+  .rail .out{font-size:13px;font-weight:600;font-stretch:90%;color:var(--ink)}
+  .rail .why{font-size:12px;color:var(--ink2);line-height:1.4;margin-top:2px;display:none}
+  .rail li.on .why,.rail.expanded .why{display:block}
+  .rail .toggle{margin-top:10px;background:none;border:0;color:var(--ink2);font:500 12.5px var(--f);padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+  .rail summary{list-style:none;cursor:default}
+  .rail summary::-webkit-details-marker{display:none}
+  @media (max-width:900px){
+    .rail{background:var(--sheet);border:1px solid var(--rule);border-radius:6px;padding:14px}
+    .rail summary{cursor:pointer;position:relative;padding-right:24px}
+    .rail summary::after{content:"";position:absolute;right:4px;top:6px;width:8px;height:8px;border-right:1.6px solid var(--ink2);border-bottom:1.6px solid var(--ink2);transform:rotate(45deg);transition:transform .2s}
+    .rail details[open] summary::after{transform:rotate(-135deg);top:10px}
+    .rail details:not([open]) .lead{margin-bottom:0}
+    .basis{text-align:left}
+    .rail:has(details:not([open])) .std{display:none}
+  }
+  .rail .std{margin-top:14px;padding-top:12px;border-top:1px solid var(--rule);font-size:12px;color:var(--ink2);line-height:1.5}
+
+  /* hero: the football field, the standard chart of a valuation report */
+  .field{background:var(--sheet);border:1px solid var(--rule);border-radius:6px;padding:22px 22px 16px}
+  .field-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .field-head h2{margin:0;font-stretch:112%;font-size:18px;font-weight:700}
+  .field-head p{margin:0;color:var(--ink2);font-size:13px}
+  .chart{position:relative;margin:26px 0 6px;padding-top:48px}
+  .lane{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:12px;height:44px}
+  .lane .lbl{font-size:13.5px;font-weight:600;line-height:1.2}
+  .lane .lbl small{display:block;font-weight:400;color:var(--ink2);font-size:12px}
+  .track{position:relative;height:100%;border-left:1px solid var(--rule)}
+  .track::after{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px dashed var(--rule2)}
+  .span{position:absolute;top:10px;height:24px;border-radius:3px;transition:left .35s ease,width .35s ease;z-index:1}
+  .span .pt{position:absolute;top:-3px;width:3px;height:30px;background:var(--ink);border-radius:1px;transform:translateX(-1px);transition:left .35s ease}
+  .span .lo,.span .hi{position:absolute;top:4px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--ink2)}
+  .span .lo{right:calc(100% + 6px)} .span .hi{left:calc(100% + 6px)}
+  .s-income{background:color-mix(in srgb,var(--income) 30%,transparent);border:1.5px solid var(--income)}
+  .s-market{background:color-mix(in srgb,var(--market) 30%,transparent);border:1.5px solid var(--market)}
+  .s-asset{background:color-mix(in srgb,var(--asset) 30%,transparent);border:1.5px solid var(--asset)}
+  .concl{position:absolute;top:0;bottom:22px;width:0;border-left:2.5px solid var(--brand);transition:left .35s ease;z-index:2}
+  .concl b{position:absolute;top:0;left:8px;white-space:nowrap;font-stretch:120%;font-weight:780;font-size:clamp(22px,3vw,30px);line-height:1;letter-spacing:-.01em}
+  .concl span{position:absolute;top:32px;left:8px;white-space:nowrap;font-size:12px;color:var(--ink2)}
+  .concl.flip b,.concl.flip span{left:auto;right:8px}
+  .axis{display:grid;grid-template-columns:120px 1fr;gap:12px}
+  .axis .ticks{position:relative;height:20px;border-top:1px solid var(--rule)}
+  .axis .ticks span{position:absolute;top:4px;transform:translateX(-50%);font-size:11.5px;color:var(--ink2)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);margin-top:8px}
+  .legend i{display:inline-block;width:14px;height:3px;background:var(--ink);vertical-align:3px;margin-right:6px}
+  .legend i.b{background:var(--brand)}
+  @media (max-width:600px){ .lane,.axis{grid-template-columns:78px 1fr} .lane .lbl small{display:none} .span .lo,.span .hi{display:none} .field{padding:16px 14px 12px} }
+
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--rule);margin-top:14px}
+  .kpis div{padding:12px 12px 2px 0}
+  .kpis div+div{padding-left:14px;border-left:1px solid var(--rule2)}
+  .kpis dt{font-size:12.5px;color:var(--ink2)}
+  .kpis dd{margin:2px 0 0;font-stretch:108%;font-size:19px;font-weight:700}
+  @media (max-width:600px){ .kpis{grid-template-columns:1fr 1fr} .kpis div:nth-child(3){padding-left:0;border-left:0} }
+
+  /* steps */
+  .step{background:var(--sheet);border:1px solid var(--rule);border-radius:6px;margin-top:18px;scroll-margin-top:16px}
+  .step-h{display:grid;grid-template-columns:34px 1fr auto;gap:12px;align-items:start;padding:18px 20px 0}
+  .step-h .n{width:30px;height:30px;border-radius:50%;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .step-h h3{margin:3px 0 0;font-stretch:112%;font-size:17px;font-weight:700;line-height:1.25}
+  .step-h p{margin:3px 0 0;color:var(--ink2);font-size:13.5px;max-width:68ch}
+  .step-h .res{text-align:right;font-stretch:105%;font-weight:700;font-size:17px;white-space:nowrap;padding-top:4px}
+  .step-h .res small{display:block;font-weight:500;font-size:12px;color:var(--ink2);font-stretch:100%}
+  @media (max-width:600px){ .step-h{grid-template-columns:30px 1fr;padding:16px 14px 0} .step-h .res{grid-column:2;text-align:left;padding-top:0} }
+  .step-b{padding:8px 20px 18px 66px}
+  @media (max-width:600px){ .step-b{padding:6px 14px 16px} }
+
+  .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 28px}
+  @media (max-width:760px){ .fields{grid-template-columns:1fr} }
+  .fld{display:grid;grid-template-columns:1fr 132px;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--rule2)}
+  .fld label{font-size:14px;line-height:1.3}
+  .fld label small{display:block;color:var(--ink2);font-size:12px;margin-top:1px}
+  .box{display:flex;align-items:center;gap:2px;background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:0 9px;height:38px}
+  .box:focus-within{border-color:var(--focus);box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 25%,transparent)}
+  .box span{color:var(--ink2);font-size:13px}
+  .box input,.box select{flex:1;min-width:0;width:100%;background:transparent;border:0;color:var(--ink);font:600 15px var(--f);font-variant-numeric:tabular-nums;text-align:right;outline:none;padding:0}
+  .box select{text-align:left;font-weight:500;font-size:14px;cursor:pointer}
+  .box select option{background:var(--sheet);color:var(--ink)}
+  .wide .fld{grid-template-columns:1fr 210px}
+  @media (max-width:420px){ .fld,.wide .fld{grid-template-columns:1fr 128px} }
+
+  .fld:has(.choice){grid-template-columns:1fr auto}
+  .choice button{white-space:nowrap}
+  .choice{display:inline-flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+  .choice button{background:var(--paper);color:var(--ink);border:0;padding:8px 12px;font:500 13px var(--f);cursor:pointer}
+  .choice button+button{border-left:1px solid var(--rule)}
+  .choice button[aria-pressed=true]{background:var(--ink);color:var(--paper);font-weight:600}
+
+  .note{color:var(--ink2);font-size:12.5px;margin:10px 0 0;max-width:72ch}
+
+  /* upload */
+  .drop{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:center;border:1.5px dashed var(--rule);border-radius:6px;padding:16px;cursor:pointer;background:var(--paper)}
+  .drop:hover,.drop.over{border-color:var(--ink)}
+  .drop input{position:absolute;opacity:0;width:1px;height:1px}
+  .drop:focus-within{outline:2px solid var(--focus);outline-offset:2px}
+  .drop svg{grid-row:span 2;width:30px;height:30px;color:var(--ink2)}
+  .drop b{font-size:14.5px}
+  .drop span{font-size:12.5px;color:var(--ink2)}
+  .file{border-top:1px solid var(--rule2);padding:12px 0 2px;margin-top:12px}
+  .file h3{font-size:14px;margin:0 0 3px;display:flex;justify-content:space-between;gap:8px;font-weight:600}
+  .file ul{margin:6px 0 0;padding-left:18px;font-size:13px}
+  .file li{margin:2px 0}
+  .file .m{color:var(--ink2);font-size:12.5px}
+  .file details summary{cursor:pointer;font-size:12.5px;color:var(--ink2);margin-top:6px}
+  .applied{font-size:12.5px;color:var(--income);margin-top:6px}
+  .pill{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:20px;border:1px solid var(--rule);color:var(--ink2);white-space:nowrap}
+  .pill.good{color:var(--income);border-color:var(--income)}
+  .pill.bad{color:var(--neg);border-color:var(--neg)}
+
+  /* tables, waterfall, sensitivity */
+  .ledger{width:100%;border-collapse:collapse;font-size:14px;margin-top:4px}
+  .ledger td{padding:7px 0;border-bottom:1px solid var(--rule2);vertical-align:top}
+  .ledger td.v{text-align:right;font-weight:600;white-space:nowrap;padding-left:12px}
+  .ledger td small{display:block;color:var(--ink2);font-size:12px}
+  .ledger tr.sum td{font-weight:700;border-bottom:1.5px solid var(--ink);font-stretch:106%}
+  .neg{color:var(--neg)}
+
+  .wf{margin:14px 0 4px}
+  .wf-row{display:grid;grid-template-columns:150px 1fr 88px;gap:10px;align-items:center;height:26px;font-size:13px}
+  .wf-bar{position:relative;height:14px}
+  .wf-bar i{position:absolute;top:0;height:14px;border-radius:2px;transition:left .35s ease,width .35s ease}
+  .wf-row .v{text-align:right;font-weight:600}
+  .wf-row.total{font-weight:700}
+  @media (max-width:600px){ .wf-row{grid-template-columns:104px 1fr 76px;font-size:12px} }
+
+  .sens{margin-top:14px;overflow-x:auto}
+  .sens table{border-collapse:separate;border-spacing:3px;font-size:12.5px;min-width:440px}
+  .sens th{font-weight:600;color:var(--ink2);padding:4px 6px;text-align:center}
+  .sens th.r{text-align:right}
+  .sens td{padding:7px 6px;text-align:center;font-weight:600;border-radius:3px}
+  .sens td.cur{outline:2px solid var(--brand);outline-offset:-2px}
+
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .btn{background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:4px;padding:9px 14px;font:600 13.5px var(--f);cursor:pointer}
+  .btn:hover{border-color:var(--ink)}
+  .btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+  details.method summary{cursor:pointer;font-weight:600;font-size:14px}
+  details.method p{font-size:13px;color:var(--ink2);margin:8px 0;max-width:76ch}
+  footer{max-width:1320px;margin:0 auto;padding:0 24px 40px;color:var(--ink2);font-size:12px;max-width:min(1320px,100%)}
+  details.adv{margin-top:2px}
+  details.adv>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink2);padding:6px 0}
+  details.adv>summary::-webkit-details-marker{display:none}
+  details.adv>summary::before{content:"";width:7px;height:7px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(-45deg);transition:transform .2s}
+  details.adv[open]>summary::before{transform:rotate(45deg)}
+  details.adv>summary:hover{color:var(--ink)}
+  .quick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;margin-top:18px;border:1px solid var(--rule);border-radius:6px;background:var(--sheet);overflow:hidden}
+  .quick a{display:block;padding:14px 16px;text-decoration:none}
+  .quick a+a{border-left:1px solid var(--rule)}
+  .quick a:hover{background:var(--paper)}
+  .quick b{display:block;font-size:14px}
+  .quick span{font-size:12.5px;color:var(--ink2)}
+  @media (max-width:700px){ .quick{grid-template-columns:1fr} .quick a+a{border-left:0;border-top:1px solid var(--rule)} }
+  @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+  @media print{ .rail,.actions,.drop{display:none} .shell{display:block} body{background:#fff} .step,.field{break-inside:avoid} }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <h1><span class="brandmark" aria-hidden="true"></span>MD Fit valuation workbench</h1>
+    <p>Follow an appraiser's process step by step. Each step shows its result, and the chart updates as you go. The starting figures are a hypothetical scenario, so replace them with numbers from your books.</p>
+  </div>
+  <div class="basis" id="basis"></div>
+</header>
+
+<div class="shell">
+
+<nav class="rail" id="rail" aria-label="Valuation process">
+  <details id="railList" open>
+  <summary><h2>The process</h2><p class="lead">What a credentialed appraiser does, in order.</p></summary>
+  <ol>
+    <li data-n="1"><span class="n">1</span><a href="#s1">Define the assignment</a><span class="out" id="o1"></span><span class="why">Valuation date, standard of value (usually fair market value: a willing buyer and seller, neither forced), premise, level of value and purpose.</span></li>
+    <li data-n="2"><span class="n">2</span><a href="#s2">Gather the records</a><span class="out" id="o2"></span><span class="why">2–3 years of tax returns, profit and loss, balance sheet, Stripe history, debts, lease and equipment. Lenders reconcile revenue to deposits.</span></li>
+    <li data-n="3"><span class="n">3</span><a href="#s3">Normalize earnings</a><span class="out" id="o3"></span><span class="why">Restate the books to true earnings: add back owner pay, depreciation, interest, taxes and one-time costs to reach SDE; subtract a market salary to reach EBITDA.</span></li>
+    <li data-n="4"><span class="n">4</span><a href="#s4">Account for obligations</a><span class="out" id="o4"></span><span class="why">Payments a buyer inherits, like the developer's revenue share, reduce the earnings being valued.</span></li>
+    <li data-n="5"><span class="n">5</span><a href="#s5">Income approach</a><span class="out" id="o5"></span><span class="why">Build a discount rate from five risks, subtract growth, and capitalize next year's earnings.</span></li>
+    <li data-n="6"><span class="n">6</span><a href="#s6">Market approach</a><span class="out" id="o6"></span><span class="why">Price the earnings with multiples from real sales of similar businesses.</span></li>
+    <li data-n="7"><span class="n">7</span><a href="#s7">Asset approach</a><span class="out" id="o7"></span><span class="why">What it would cost to replace the equipment and the software, less wear and age. Usually a floor.</span></li>
+    <li data-n="8"><span class="n">8</span><a href="#s8">Reconcile</a><span class="out" id="o8"></span><span class="why">Weight the three results by how reliable each is for this business, and say why.</span></li>
+    <li data-n="9"><span class="n">9</span><a href="#s9">Partial-stake discounts</a><span class="out" id="o9"></span><span class="why">A small stake is worth less than its share: discounts for lack of control and lack of marketability.</span></li>
+    <li data-n="10"><span class="n">10</span><a href="#s10">Lender test</a><span class="out" id="o10"></span><span class="why">SBA SOP 50 10 8.1: historical earnings only, 1.25x debt service coverage for owner buyouts, and the valuation caps the loan.</span></li>
+    <li data-n="11"><span class="n">11</span><a href="#s11">Report and sign-off</a><span class="out" id="o11"></span><span class="why">A written conclusion of value signed by an ASA, ABV or CVA, stating every assumption.</span></li>
+  </ol>
+  </details>
+  <button class="toggle" id="railToggle" type="button" aria-expanded="false">Show what every step means</button>
+  <div class="std">Standards: AICPA VS Section 100, NACVA and ASA business valuation standards, USPAP Standards 9–10, IRS Revenue Ruling 59-60, and SBA SOP 50 10 8.1 for lending.</div>
+</nav>
+
+<main>
+
+  <section class="field" aria-labelledby="fieldTitle">
+    <div class="field-head">
+      <h2 id="fieldTitle">Indicated value of the whole business</h2>
+      <p id="fieldSub"></p>
+    </div>
+    <div class="chart" id="chart">
+      <div class="lane"><div class="lbl">Income<small>rate ±2 pts</small></div><div class="track"><div class="span s-income" id="bI"><span class="lo"></span><span class="pt"></span><span class="hi"></span></div></div></div>
+      <div class="lane"><div class="lbl">Market<small>±0.5x</small></div><div class="track"><div class="span s-market" id="bM"><span class="lo"></span><span class="pt"></span><span class="hi"></span></div></div></div>
+      <div class="lane"><div class="lbl">Asset<small>15–45% wear</small></div><div class="track"><div class="span s-asset" id="bA"><span class="lo"></span><span class="pt"></span><span class="hi"></span></div></div></div>
+      <div class="concl" id="concl"><b id="valueBig">—</b><span id="valueSub"></span></div>
+      <div class="axis"><span></span><div class="ticks" id="ticks"></div></div>
+    </div>
+    <div class="legend"><span><i></i>Point estimate for each approach</span><span><i class="b"></i>Reconciled value (weighted)</span></div>
+    <dl class="kpis">
+      <div><dt>SDE</dt><dd id="kSde">—</dd></div>
+      <div><dt>Value ÷ SDE</dt><dd id="kMult">—</dd></div>
+      <div><dt>Developer share, per year</dt><dd id="kShare">—</dd></div>
+      <div><dt>Supportable loan</dt><dd id="kLoan">—</dd></div>
+    </dl>
+  </section>
+
+  <nav class="quick" aria-label="How to use">
+    <a href="#s2"><b>1. Upload your books</b><span>Stripe exports or a profit and loss file fill in the numbers for you.</span></a>
+    <a href="#s3"><b>2. Or type the numbers</b><span>Revenue, costs and add-backs in step 3. That's all it needs.</span></a>
+    <a href="#s4"><b>3. Read the evaluation</b><span>The chart above and every step update instantly. Assumptions use standard defaults.</span></a>
+  </nav>
+
+  <section class="step wide" id="s1" data-step="1">
+    <div class="step-h"><span class="n">1</span><div><h3>Define the assignment</h3><p>Every number below depends on these choices, so an appraiser settles them first.</p></div><div class="res" id="r1"></div></div>
+    <div class="step-b"><details class="adv"><summary>Change the assignment</summary><div class="fields">
+      <div class="fld"><label for="vdate">Valuation date<small>Figures are as of this day</small></label><div class="box"><input id="vdate" type="date"></div></div>
+      <div class="fld"><label for="stdv">Standard of value<small>Whose price is measured</small></label><div class="box"><select id="stdv"><option>Fair market value</option><option>Fair value</option><option>Investment value</option></select></div></div>
+      <div class="fld"><label for="premise">Premise of value</label><div class="box"><select id="premise"><option>Going concern</option><option>Orderly liquidation</option></select></div></div>
+      <div class="fld"><label for="level">Level of value<small>Whole business or a minority stake</small></label><div class="box"><select id="level"><option>Controlling interest</option><option>Minority interest</option></select></div></div>
+      <div class="fld"><label for="purpose">Purpose</label><div class="box"><select id="purpose"><option>Equity extraction or financing</option><option>Partner buy-in or buyout</option><option>Sale</option><option>Internal planning</option></select></div></div>
+    </div></details></div>
+  </section>
+
+  <section class="step" id="s2" data-step="2">
+    <div class="step-h"><span class="n">2</span><div><h3>Gather the records</h3><p>Upload Stripe exports and profit and loss statements to fill steps 3 and 4. Files are read on this device and never sent anywhere.</p></div><div class="res" id="r2"></div></div>
+    <div class="step-b">
+      <label class="drop" id="drop">
+        <input id="files" type="file" multiple accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 15V4m0 0l-4 4m4-4l4 4M5 14v4a2 2 0 002 2h10a2 2 0 002-2v-4"/></svg>
+        <b>Choose files or drop them here</b>
+        <span>Stripe payments or balance history, and profit and loss from QuickBooks, Xero or a spreadsheet. CSV or Excel.</span>
+      </label>
+      <div id="report"></div>
+      <p class="note">PDFs and scanned tax returns can't be read here; type those figures into step 3. When a Stripe export and a P&amp;L are both uploaded, the last file read sets the revenue fields.</p>
+    </div>
+  </section>
+
+  <section class="step" id="s3" data-step="3">
+    <div class="step-h"><span class="n">3</span><div><h3>Normalize earnings</h3><p>Turn the books into the earnings a buyer would actually get.</p></div><div class="res" id="r3"></div></div>
+    <div class="step-b">
+      <div class="fields">
+        <div class="fld"><label for="subsMo">App subscriptions per month<small>Memberships and add-ons</small></label><div class="box"><span>$</span><input id="subsMo" type="number" inputmode="decimal" value="5000"></div></div>
+        <div class="fld"><label for="clinic">Clinic revenue per year<small>Visits, protocols, invoices for care</small></label><div class="box"><span>$</span><input id="clinic" type="number" inputmode="decimal" value="60000"></div></div>
+        <div class="fld"><label for="fee">Card processing fees</label><div class="box"><input id="fee" type="number" step="0.1" value="3.2"><span>%</span></div></div>
+        <div class="fld"><label for="clinicCost">Clinic operating costs<small>Rent, supplies, staff; not owner pay</small></label><div class="box"><span>$</span><input id="clinicCost" type="number" value="30000"></div></div>
+        <div class="fld"><label for="platCost">Platform costs per month<small>Hosting, AI, video, email</small></label><div class="box"><span>$</span><input id="platCost" type="number" value="150"></div></div>
+        <div class="fld"><label for="ownerPay">Owner pay booked as expense<small>Added back</small></label><div class="box"><span>$</span><input id="ownerPay" type="number" value="0"></div></div>
+        <div class="fld"><label for="addbacks">One-time and personal costs<small>Plus depreciation, interest, taxes</small></label><div class="box"><span>$</span><input id="addbacks" type="number" value="0"></div></div>
+        <div class="fld"><label for="marketPay">Market salary for an operator<small>Subtracted to reach EBITDA</small></label><div class="box"><span>$</span><input id="marketPay" type="number" value="0"></div></div>
+      </div>
+      <div class="wf" id="wf" aria-label="Earnings bridge"></div>
+    </div>
+  </section>
+
+  <section class="step" id="s4" data-step="4">
+    <div class="step-h"><span class="n">4</span><div><h3>Account for obligations</h3><p>The developer's revenue share comes off online net revenue (gross less refunds, tax and Stripe's fee). Clinic revenue is entirely the clinic's.</p></div><div class="res" id="r4"></div></div>
+    <div class="step-b">
+      <div class="fields">
+        <div class="fld"><label>Developer status<small>Agreement Revision 2, as built in the code</small></label><div class="choice" id="status" role="group" aria-label="Developer status"><button type="button" data-v="active" aria-pressed="true">Active</button><button type="button" data-v="continuing" aria-pressed="false">Stepped down</button></div></div>
+        <div class="fld"><label for="activePct">Rate while active</label><div class="box"><input id="activePct" type="number" step="0.5" value="15"><span>%</span></div></div>
+        <div class="fld"><label for="contPct">Rate after stepping down</label><div class="box"><input id="contPct" type="number" step="0.5" value="5"><span>%</span></div></div>
+      </div>
+      <table class="ledger" id="t4"></table>
+    </div>
+  </section>
+
+  <section class="step" id="s5" data-step="5">
+    <div class="step-h"><span class="n">5</span><div><h3>Income approach</h3><p>Value = next year's earnings ÷ (discount rate − growth). The discount rate is built from five layers of risk.</p></div><div class="res" id="r5"></div></div>
+    <div class="step-b">
+      <details class="adv"><summary>Change the assumptions</summary><div class="fields">
+        <div class="fld"><label for="rf">Risk-free rate<small>Long-term Treasury yield</small></label><div class="box"><input id="rf" type="number" step="0.1" value="4.5"><span>%</span></div></div>
+        <div class="fld"><label for="erp">Equity risk premium</label><div class="box"><input id="erp" type="number" step="0.1" value="6"><span>%</span></div></div>
+        <div class="fld"><label for="size">Size premium<small>Highest for very small businesses</small></label><div class="box"><input id="size" type="number" step="0.5" value="10"><span>%</span></div></div>
+        <div class="fld"><label for="ind">Industry risk</label><div class="box"><input id="ind" type="number" step="0.5" value="2"><span>%</span></div></div>
+        <div class="fld"><label for="csr">Company-specific risk<small>Owner dependence, revenue age. Owned systems lower it.</small></label><div class="box"><input id="csr" type="number" step="0.5" value="8"><span>%</span></div></div>
+        <div class="fld"><label for="g">Long-term growth</label><div class="box"><input id="g" type="number" step="0.5" value="4"><span>%</span></div></div>
+        <div class="fld"><label>Earnings measure</label><div class="choice" id="stream" role="group" aria-label="Earnings measure"><button type="button" data-v="sde" aria-pressed="true">SDE</button><button type="button" data-v="ebitda" aria-pressed="false">EBITDA</button></div></div>
+      </div></details>
+      <table class="ledger" id="t5"></table>
+    </div>
+  </section>
+
+  <section class="step" id="s6" data-step="6">
+    <div class="step-h"><span class="n">6</span><div><h3>Market approach</h3><p>Apply a multiple drawn from sold businesses of similar industry and size (DealStats, BIZCOMPS).</p></div><div class="res" id="r6"></div></div>
+    <div class="step-b">
+      <details class="adv"><summary>Change the assumptions</summary><div class="fields"><div class="fld"><label for="mult">Price ÷ SDE multiple</label><div class="box"><input id="mult" type="number" step="0.1" value="3"><span>x</span></div></div></div></details>
+      <div class="sens" id="sens"></div>
+      <p class="note">Reconciled value at each combination of company-specific risk and market multiple. The outlined cell is the current setting.</p>
+    </div>
+  </section>
+
+  <section class="step" id="s7" data-step="7">
+    <div class="step-h"><span class="n">7</span><div><h3>Asset approach</h3><p>What it would cost to replace what the business owns, including its software.</p></div><div class="res" id="r7"></div></div>
+    <div class="step-b"><details class="adv"><summary>Change the assumptions</summary><div class="fields">
+      <div class="fld"><label for="tangible">Tangible net assets<small>Equipment, cash, receivables, less debts</small></label><div class="box"><span>$</span><input id="tangible" type="number" value="15000"></div></div>
+      <div class="fld"><label for="swCost">Software replacement cost<small>A custom EHR alone runs about $50K–$500K+</small></label><div class="box"><span>$</span><input id="swCost" type="number" value="150000"></div></div>
+      <div class="fld"><label for="obs">Obsolescence<small>Deduction for age, upkeep and fit</small></label><div class="box"><input id="obs" type="number" step="5" value="30"><span>%</span></div></div>
+    </div></details></div>
+  </section>
+
+  <section class="step" id="s8" data-step="8">
+    <div class="step-h"><span class="n">8</span><div><h3>Reconcile</h3><p>Weight each approach by how reliable it is here. An operating clinic leans on income and market; assets set a floor.</p></div><div class="res" id="r8"></div></div>
+    <div class="step-b"><details class="adv"><summary>Change the assumptions</summary><div class="fields">
+      <div class="fld"><label for="wI">Income weight</label><div class="box"><input id="wI" type="number" step="5" value="50"><span>%</span></div></div>
+      <div class="fld"><label for="wM">Market weight</label><div class="box"><input id="wM" type="number" step="5" value="40"><span>%</span></div></div>
+      <div class="fld"><label for="wA">Asset weight</label><div class="box"><input id="wA" type="number" step="5" value="10"><span>%</span></div></div>
+    </div></details><p class="note" id="wNote"></p></div>
+  </section>
+
+  <section class="step" id="s9" data-step="9">
+    <div class="step-h"><span class="n">9</span><div><h3>Partial-stake discounts</h3><p>Applies only if the developer's 5% were ownership. A revenue share is valued as a stream of payments instead (step 4).</p></div><div class="res" id="r9"></div></div>
+    <div class="step-b">
+      <details class="adv"><summary>Change the assumptions</summary><div class="fields">
+        <div class="fld"><label for="interest">Stake to value</label><div class="box"><input id="interest" type="number" step="0.5" value="5"><span>%</span></div></div>
+        <div class="fld"><label for="dloc">Lack of control discount</label><div class="box"><input id="dloc" type="number" step="1" value="15"><span>%</span></div></div>
+        <div class="fld"><label for="dlom">Lack of marketability discount</label><div class="box"><input id="dlom" type="number" step="1" value="25"><span>%</span></div></div>
+      </div></details>
+      <table class="ledger" id="t9"></table>
+    </div>
+  </section>
+
+  <section class="step" id="s10" data-step="10">
+    <div class="step-h"><span class="n">10</span><div><h3>Lender test</h3><p>Under SBA SOP 50 10 8.1, a lender uses filed historical earnings only. Yearly payments can't exceed EBITDA ÷ the required coverage, and the valuation caps the loan.</p></div><div class="res" id="r10"></div></div>
+    <div class="step-b">
+      <details class="adv"><summary>Change the assumptions</summary><div class="fields">
+        <div class="fld"><label for="dscr">Required coverage<small>1.25x for owner buyouts</small></label><div class="box"><input id="dscr" type="number" step="0.05" value="1.25"><span>x</span></div></div>
+        <div class="fld"><label for="rate">Loan rate</label><div class="box"><input id="rate" type="number" step="0.25" value="10.5"><span>%</span></div></div>
+        <div class="fld"><label for="term">Loan term</label><div class="box"><input id="term" type="number" step="1" value="10"><span>years</span></div></div>
+      </div></details>
+      <table class="ledger" id="t10"></table>
+    </div>
+  </section>
+
+  <section class="step" id="s11" data-step="11">
+    <div class="step-h"><span class="n">11</span><div><h3>Report and sign-off</h3><p>This workbench produces a draft. A conclusion of value has to be written and signed by a credentialed appraiser (ASA, ABV or CVA).</p></div><div class="res" id="r11"></div></div>
+    <div class="step-b">
+      <details class="method"><summary>Formulas used on this page</summary>
+        <p>SDE = net revenue − operating and platform costs − revenue share + owner pay + one-time, personal and non-cash add-backs. EBITDA = SDE − market salary for an operator.</p>
+        <p>Income: earnings × (1 + g) ÷ (r − g), where r = risk-free + equity risk premium + size + industry + company-specific. Market: SDE × multiple. Asset: tangible net assets + software replacement cost × (1 − obsolescence).</p>
+        <p>Reconciled value: weighted average of the three. Partial stake: pro-rata value × (1 − DLOC) × (1 − DLOM). Revenue-share stream: annual share × (1 + g) ÷ (r − g). Supportable loan: (EBITDA ÷ coverage) turned into principal at the loan rate and term, capped at the reconciled value.</p>
+      </details>
+      <div class="actions">
+        <button class="btn primary" id="copy" type="button">Copy summary</button>
+        <button class="btn" type="button" onclick="window.print()">Print or save as PDF</button>
+        <button class="btn" id="reset" type="button">Reset to the scenario</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+</div>
+
+<footer>Not an appraisal, legal opinion or financial advice. Starting figures are hypothetical. Discount rates, multiples and discounts must come from a credentialed appraiser using current market data and filed financial statements.</footer>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  { const d = $("vdate"); const t = new Date(); d.value = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`; }
+  const ids = ["vdate","stdv","premise","level","purpose","subsMo","clinic","fee","g","clinicCost","platCost","ownerPay","addbacks","marketPay","activePct","contPct","rf","erp","size","ind","csr","mult","tangible","swCost","obs","wI","wM","wA","interest","dloc","dlom","dscr","rate","term"];
+  const defaults = {}; ids.forEach((k) => defaults[k] = $(k).value);
+  const segs = { status: "active", stream: "sde" }, segDefaults = { ...segs };
+  const KEY = "mdfit-eval-v2";
+  const num = (k) => { const v = parseFloat($(k).value); return isFinite(v) ? v : 0; };
+  const pct = (k) => num(k) / 100;
+  const usd = (n) => !isFinite(n) ? "—" : (n < 0 ? "−$" : "$") + Math.round(Math.abs(n)).toLocaleString("en-US");
+  const short = (n) => !isFinite(n) ? "—" : Math.abs(n) >= 1e6 ? "$" + (n/1e6).toFixed(2) + "M" : "$" + Math.round(n/1000) + "K";
+  const fmtPct = (n) => (n * 100).toFixed(1) + "%";
+  let filesRead = 0;
+
+  function load(){ try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (!s) return;
+    ids.forEach((k) => { if (s[k] !== undefined && k !== "vdate") $(k).value = s[k]; });
+    ["status","stream"].forEach((k) => { if (s[k]) segs[k] = s[k]; }); } catch (e) {} }
+  function save(){ try { const s = { ...segs }; ids.forEach((k) => s[k] = $(k).value); localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  function paintSegs(){ Object.keys(segs).forEach((k) => $(k).querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === segs[k])))); }
+
+  function calc(o = {}){
+    const fee = pct("fee"), g = pct("g");
+    const onlineGross = num("subsMo") * 12, onlineNet = onlineGross * (1 - fee);
+    const clinicNet = num("clinic") * (1 - fee);
+    const sharePct = (segs.status === "active" ? num("activePct") : num("contPct")) / 100;
+    const share = onlineNet * sharePct;
+    const costs = num("clinicCost") + num("platCost") * 12;
+    const add = num("ownerPay") + num("addbacks");
+    const sde = onlineNet + clinicNet - costs - share + add;
+    const ebitda = sde - num("marketPay");
+    const csr = o.csr !== undefined ? o.csr : pct("csr");
+    const r = pct("rf") + pct("erp") + pct("size") + pct("ind") + csr + (o.dr || 0);
+    const cap = r - g;
+    const benefit = segs.stream === "sde" ? sde : ebitda;
+    const income = cap > 0 ? Math.max(0, benefit * (1 + g) / cap) : NaN;
+    const mult = o.mult !== undefined ? o.mult : num("mult");
+    const market = Math.max(0, sde * mult);
+    const obs = o.obs !== undefined ? o.obs : pct("obs");
+    const software = num("swCost") * (1 - obs);
+    const asset = num("tangible") + software;
+    const wI = num("wI"), wM = num("wM"), wA = num("wA"), wSum = (wI + wM + wA) || 1;
+    const value = isFinite(income) ? (income * wI + market * wM + asset * wA) / wSum : NaN;
+    return { fee, g, onlineGross, onlineNet, clinicNet, sharePct, share, costs, add, sde, ebitda, r, cap, benefit, income, market, software, asset, value, wI, wM, wA, wSum };
+  }
+  const rows = (el, list) => el.innerHTML = list.map(([a, b, note, cls]) => `<tr class="${cls||""}"><td>${a}${note ? `<small>${note}</small>` : ""}</td><td class="v">${b}</td></tr>`).join("");
+
+  function field(c){
+    const iLo = calc({ dr: 0.02 }).income, iHi = calc({ dr: -0.02 }).income;
+    const m = num("mult"), mLo = calc({ mult: Math.max(0, m - 0.5) }).market, mHi = calc({ mult: m + 0.5 }).market;
+    const aLo = calc({ obs: 0.45 }).asset, aHi = calc({ obs: 0.15 }).asset;
+    const lanes = [["bI", iLo, iHi, c.income], ["bM", mLo, mHi, c.market], ["bA", aLo, aHi, c.asset]];
+    const vals = lanes.flatMap(([, a, b, p]) => [a, b, p]).concat(c.value).filter(isFinite);
+    const step = niceStep(Math.max(...vals, 1)) * (window.matchMedia("(max-width:600px)").matches ? 2 : 1);
+    const max = Math.ceil(Math.max(...vals, 1) * 1.08 / step) * step;
+    const x = (v) => Math.max(0, Math.min(100, v / max * 100));
+    lanes.forEach(([id, lo, hi, p]) => {
+      const el = $(id), L = x(Math.min(lo, hi)), R = x(Math.max(lo, hi));
+      el.style.left = L + "%"; el.style.width = Math.max(0.6, R - L) + "%";
+      el.querySelector(".lo").textContent = short(Math.min(lo, hi)); el.querySelector(".hi").textContent = short(Math.max(lo, hi));
+      const w = Math.max(R - L, 0.0001); el.querySelector(".pt").style.left = (isFinite(p) ? (x(p) - L) / w * 100 : 0) + "%";
+    });
+    const cx = x(c.value), cl = $("concl");
+    cl.style.left = `calc(132px + (100% - 132px) * ${cx / 100})`;
+    if (window.matchMedia("(max-width:600px)").matches) cl.style.left = `calc(90px + (100% - 90px) * ${cx / 100})`;
+    cl.classList.toggle("flip", cx > 62);
+    $("valueBig").textContent = usd(c.value);
+    $("valueSub").textContent = isFinite(c.value) ? `${(c.value / Math.max(c.sde, 1)).toFixed(1)}x SDE` : "Discount rate must exceed growth";
+    let t = ""; for (let v = 0; v <= max + 1; v += step) t += `<span style="left:${x(v)}%">${short(v)}</span>`;
+    $("ticks").innerHTML = t;
+  }
+  function niceStep(max){ const raw = max / 5, p = Math.pow(10, Math.floor(Math.log10(raw))); const n = raw / p; return (n < 1.5 ? 1 : n < 3.5 ? 2.5 : n < 7.5 ? 5 : 10) * p; }
+
+  function waterfall(c){
+    const items = [["Online, net of fees", c.onlineNet, "var(--income)"], ["Clinic, net of fees", c.clinicNet, "var(--income)"],
+      ["Operating costs", -c.costs, "var(--neg)"], ["Revenue share", -c.share, "var(--neg)"], ["Add-backs", c.add, "var(--market)"]];
+    const top = Math.max(c.onlineNet + c.clinicNet + Math.max(0, c.add), c.sde, 1);
+    let run = 0, html = "";
+    for (const [n, v, col] of items) {
+      const a = run, b = run + v; run = b;
+      const L = Math.min(a, b) / top * 100, W = Math.abs(v) / top * 100;
+      html += `<div class="wf-row"><span>${n}</span><span class="wf-bar"><i style="left:${Math.max(0,L)}%;width:${Math.max(0.4,W)}%;background:${col}"></i></span><span class="v ${v < 0 ? "neg" : ""}">${usd(v)}</span></div>`;
+    }
+    html += `<div class="wf-row total"><span>SDE</span><span class="wf-bar"><i style="left:0;width:${Math.max(0.4, Math.max(0, c.sde) / top * 100)}%;background:var(--ink)"></i></span><span class="v">${usd(c.sde)}</span></div>`;
+    $("wf").innerHTML = html;
+  }
+
+  function sens(){
+    const base = num("csr"), m = num("mult");
+    const csrs = [-4, -2, 0, 2, 4].map((d) => Math.max(0, base + d)), mults = [-1, -0.5, 0, 0.5, 1].map((d) => Math.max(0, +(m + d).toFixed(1)));
+    const grid = csrs.map((cs) => mults.map((mu) => calc({ csr: cs / 100, mult: mu }).value));
+    const flat = grid.flat().filter(isFinite), lo = Math.min(...flat), hi = Math.max(...flat);
+    let h = `<table><tr><th class="r">Risk ↓ · Multiple →</th>${mults.map((mu) => `<th>${mu}x</th>`).join("")}</tr>`;
+    grid.forEach((row, i) => {
+      h += `<tr><th class="r">${csrs[i]}%</th>` + row.map((v, j) => {
+        const t = hi > lo ? (v - lo) / (hi - lo) : .5;
+        return `<td class="${i === 2 && j === 2 ? "cur" : ""}" style="background:color-mix(in srgb,var(--income) ${Math.round(8 + t * 42)}%,transparent)">${short(v)}</td>`;
+      }).join("") + "</tr>";
+    });
+    $("sens").innerHTML = h + "</table>";
+  }
+
+  function render(){
+    const c = calc();
+    const std = $("stdv").value, date = $("vdate").value || "—";
+    $("basis").innerHTML = `<b>${std}</b>, ${$("premise").value.toLowerCase()}<br>${$("level").value.toLowerCase()}, as of ${date}`;
+    $("fieldSub").textContent = `${std}, 100% of the business, as of ${date}`;
+    field(c); waterfall(c); sens();
+
+    const activeShare = c.onlineNet * num("activePct") / 100, contShare = c.onlineNet * num("contPct") / 100;
+    const streamPV = (a) => c.cap > 0 ? a * (1 + c.g) / c.cap : NaN;
+    const proRata = c.value * pct("interest"), equity = proRata * (1 - pct("dloc")) * (1 - pct("dlom"));
+    const i = pct("rate") / 12, n = num("term") * 12, ds = Math.max(0, c.ebitda) / Math.max(num("dscr"), 0.01);
+    const principal = i > 0 ? (ds / 12) * (1 - Math.pow(1 + i, -n)) / i : (ds / 12) * n;
+    const loan = isFinite(c.value) ? Math.min(principal, c.value) : principal;
+
+    $("kSde").textContent = usd(c.sde);
+    $("kMult").textContent = isFinite(c.value) ? (c.value / Math.max(c.sde, 1)).toFixed(1) + "x" : "—";
+    $("kShare").textContent = usd(c.share);
+    $("kLoan").textContent = usd(loan);
+
+    rows($("t4"), [
+      ["Online gross", usd(c.onlineGross)], ["Online net of card fees", usd(c.onlineNet)],
+      ["Share while active", usd(activeShare) + " a year", `${usd(activeShare / 12)} a month at ${num("activePct")}%`],
+      ["Share after stepping down", usd(contShare) + " a year", `${usd(contShare / 12)} a month at ${num("contPct")}%`],
+      ["Continuing share valued as a stream", usd(streamPV(contShare)), "Capitalized at the step 5 rate; holds only if the share can't be cut off", "sum"],
+    ]);
+    const tag = c.r >= 0.30 ? "high risk" : c.r >= 0.22 ? "moderate risk" : "lower risk";
+    rows($("t5"), [
+      ["Discount rate", fmtPct(c.r), `${num("rf")} + ${num("erp")} + ${num("size")} + ${num("ind")} + ${num("csr")}, ${tag}`],
+      ["Capitalization rate", fmtPct(c.cap), "Discount rate minus growth"],
+      ["Earnings capitalized", usd(c.benefit), segs.stream === "sde" ? "SDE" : "EBITDA"],
+      ["Income value", usd(c.income), "", "sum"],
+    ]);
+    rows($("t9"), [["Pro-rata share of value", usd(proRata)], ["After both discounts", usd(equity), "Minority, hard-to-sell stake", "sum"]]);
+    rows($("t10"), [
+      ["EBITDA available for payments", usd(c.ebitda)], [`Most the business can pay at ${num("dscr")}x`, usd(ds) + " a year", `${usd(ds / 12)} a month`],
+      [`Loan those payments support`, usd(principal), `${num("rate")}% over ${num("term")} years`],
+      ["Supportable loan", usd(loan), principal > c.value ? "Limited by the valuation" : "Limited by coverage", "sum"],
+    ]);
+    $("wNote").textContent = c.wSum !== 100 ? `Weights add to ${c.wSum}%, so they are scaled to 100%.` : "Weights add to 100%.";
+
+    const out = {
+      1: [$("stdv").value, $("level").value.replace(" interest", "")],
+      2: [filesRead ? `${filesRead} file${filesRead > 1 ? "s" : ""} read` : "Scenario figures", filesRead ? "Applied to steps 3 and 4" : "Upload to replace"],
+      3: [usd(c.sde), "SDE"], 4: ["−" + usd(c.share).replace("$", "$"), "Revenue share per year"],
+      5: [usd(c.income), `${fmtPct(c.r)} discount rate`], 6: [usd(c.market), `${num("mult")}x SDE`],
+      7: [usd(c.asset), "Replacement less obsolescence"], 8: [usd(c.value), "Reconciled value"],
+      9: [usd(equity), `${num("interest")}% stake after discounts`], 10: [usd(loan), "Supportable loan"],
+      11: ["Draft", "Needs an appraiser's signature"],
+    };
+    for (const k in out) { $("o" + k).textContent = out[k][0]; $("r" + k).innerHTML = `${out[k][0]}<small>${out[k][1]}</small>`; }
+    save();
+  }
+
+  function summary(){
+    const c = calc();
+    return [`MD Fit valuation workbench (draft, illustrative)`,
+      `${$("stdv").value}, ${$("premise").value.toLowerCase()}, ${$("level").value.toLowerCase()}, as of ${$("vdate").value}`,
+      `Reconciled value: ${usd(c.value)} (${(c.value / Math.max(c.sde, 1)).toFixed(1)}x SDE)`,
+      `Income ${usd(c.income)}, market ${usd(c.market)}, asset ${usd(c.asset)}`,
+      `SDE ${usd(c.sde)}, EBITDA ${usd(c.ebitda)}, discount rate ${fmtPct(c.r)}`,
+      `Developer share: ${usd(c.onlineNet * num("activePct") / 100)} a year active, ${usd(c.onlineNet * num("contPct") / 100)} a year after stepping down`,
+      `Not an appraisal. Inputs must be confirmed by a credentialed appraiser.`].join("\n");
+  }
+
+  // ---------- upload: read Stripe exports and P&L statements on the device ----------
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+  const money = (v) => {
+    if (typeof v === "number") return v;
+    let s = String(v == null ? "" : v).trim(); if (!s) return NaN;
+    if (!/^[\s$€£(\-–]*[\d,]*\.?\d+[\s)\-–%]*$/.test(s)) return NaN; // "2026 YTD", dates and labels are not amounts
+    const neg = /^\(.*\)$/.test(s) || /^-/.test(s) || /-$/.test(s);
+    s = s.replace(/[^0-9.]/g, ""); if (!s) return NaN;
+    const n = parseFloat(s); return isFinite(n) ? (neg ? -n : n) : NaN;
+  };
+  function parseCSV(text){
+    const delim = (text.split("\n")[0].match(/\t/g) || []).length > (text.split("\n")[0].match(/,/g) || []).length ? "\t" : ",";
+    const out = []; let row = [], cur = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === delim) { row.push(cur); cur = ""; }
+      else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cur); out.push(row); row = []; cur = ""; }
+      else cur += ch;
+    }
+    if (cur !== "" || row.length) { row.push(cur); out.push(row); }
+    return out.filter((r) => r.some((c) => String(c).trim() !== ""));
+  }
+  let xlsxLib = null;
+  function loadXLSX(){
+    if (xlsxLib) return Promise.resolve(xlsxLib);
+    return new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "/vendor/xlsx-0.18.5.full.min.js";
+      s.onload = () => { xlsxLib = window.XLSX; res(xlsxLib); };
+      s.onerror = () => rej(new Error("Couldn't load the Excel reader (needs internet). Save the sheet as CSV and upload that."));
+      document.head.appendChild(s);
+    });
+  }
+  async function readRows(file){
+    if (/\.(xlsx|xls)$/i.test(file.name)) {
+      const X = await loadXLSX();
+      const wb = X.read(await file.arrayBuffer(), { type: "array" });
+      return X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: "" });
+    }
+    if (/\.pdf$/i.test(file.name)) throw new Error("PDFs can't be read here. Export the report as CSV or Excel, or type the figures in.");
+    return parseCSV(await file.text());
+  }
+
+  // Stripe: a header row containing amount + fee (payments, balance history or payouts export)
+  function asStripe(rows){
+    const h = (rows[0] || []).map((c) => String(c).toLowerCase().trim());
+    const col = (...names) => h.findIndex((x) => names.some((n) => x === n || x.startsWith(n)));
+    const iAmt = col("amount", "gross"), iFee = col("fee"), iType = col("type", "reporting_category", "status"),
+          iDesc = col("description", "statement descriptor"), iDate = col("created", "available on", "date"),
+          iRef = col("amount refunded", "refunded");
+    if (iAmt < 0 || iFee < 0) return null;
+    let subs = 0, other = 0, fees = 0, refunds = 0, n = 0, skipped = 0, first = null, last = null;
+    for (const r of rows.slice(1)) {
+      const type = iType >= 0 ? String(r[iType]).toLowerCase() : "";
+      if (/payout|transfer|adjustment|failed|refunded$|canceled/.test(type)) { skipped++; continue; }
+      const amt = money(r[iAmt]); if (!isFinite(amt)) continue;
+      if (amt < 0 || /refund/.test(type)) { refunds += Math.abs(amt); continue; }
+      const desc = iDesc >= 0 ? String(r[iDesc]).toLowerCase() : "";
+      if (/subscription|membership|accountability|invoice|renewal|add-on/.test(desc)) subs += amt; else other += amt;
+      fees += Math.abs(money(r[iFee]) || 0);
+      if (iRef >= 0) refunds += Math.abs(money(r[iRef]) || 0);
+      n++;
+      const d = iDate >= 0 ? new Date(r[iDate]) : null;
+      if (d && !isNaN(d)) { if (!first || d < first) first = d; if (!last || d > last) last = d; }
+    }
+    if (!n) return null;
+    const months = first && last ? Math.max(1, Math.round((last - first) / (30.44 * 86400000)) + 1) : 12;
+    return { kind: "stripe", subs, other, fees, refunds, n, skipped, months, first, last };
+  }
+
+  // P&L: label column + one or more amount columns; uses the right-most column with numbers (latest period)
+  const PL = [
+    ["skip", /^(total|net income|net profit|gross profit|net operating|ebitda|operating income)/],
+    ["online", /(online|subscription|membership|app revenue|digital|telehealth)/],
+    ["revenue", /(revenue|income|sales|service|visit|treatment|massage|protocol|fees earned)/],
+    ["ownerPay", /(officer|owner|shareholder|member draw|guaranteed payment|owner'?s? (salary|comp|pay))/],
+    ["addback", /(depreciation|amortization|interest expense|^interest|income tax|one[- ]time|non[- ]?recurring|personal|startup|start-up|development|build|legal settlement)/],
+    ["platform", /(software|hosting|cloud|aws|railway|vercel|saas|subscriptions? expense|ai |openai|bedrock|bunny|cloudinary|domain)/],
+    ["cost", /./],
+  ];
+  function asPL(rows){
+    const width = Math.max(...rows.map((r) => r.length));
+    let col = -1;
+    for (let c = width - 1; c >= 1; c--) { if (rows.filter((r) => isFinite(money(r[c]))).length >= 3) { col = c; break; } }
+    if (col < 0) return null;
+    const head = rows.find((r) => !isFinite(money(r[col])) && String(r[col]).trim());
+    const t = { online: 0, revenue: 0, ownerPay: 0, addback: 0, platform: 0, cost: 0 }, lines = [];
+    let section = "";
+    for (const r of rows) {
+      const label = String(r[0] == null ? "" : r[0]).trim(); const low = label.toLowerCase();
+      const v = money(r[col]);
+      if (!isFinite(v)) { if (/income|revenue|sales/.test(low)) section = "rev"; else if (/expense|cost/.test(low)) section = "exp"; continue; }
+      if (!label) continue;
+      let k = PL.find(([, re]) => re.test(low))[0];
+      if (k === "skip") continue;
+      if (section === "exp" && (k === "revenue" || k === "online")) k = "cost";
+      if (section === "rev" && !["online", "revenue"].includes(k)) k = "revenue";
+      t[k] += k === "online" || k === "revenue" ? v : Math.abs(v);
+      lines.push([label, k, v]);
+    }
+    if (!lines.length) return null;
+    return { kind: "pl", t, lines, period: head ? String(head[col]).trim() : `column ${col + 1}` };
+  }
+
+  const NAMES = { online: "Online revenue", revenue: "Clinic revenue", ownerPay: "Owner pay (added back)", addback: "Add-back (D&A, interest, tax, one-time)", platform: "Platform costs", cost: "Clinic operating costs" };
+  function apply(res){
+    if (res.kind === "stripe") {
+      const gross = res.subs + res.other, perYear = 12 / res.months;
+      if (res.subs) $("subsMo").value = Math.round(res.subs / res.months);
+      if (res.other) $("clinic").value = Math.round(res.other * perYear);
+      if (gross) $("fee").value = (res.fees / gross * 100).toFixed(2);
+    } else {
+      const t = res.t;
+      if (t.online) $("subsMo").value = Math.round(t.online / 12);
+      if (t.revenue) $("clinic").value = Math.round(t.revenue);
+      $("clinicCost").value = Math.round(t.cost);
+      if (t.platform) $("platCost").value = Math.round(t.platform / 12);
+      $("ownerPay").value = Math.round(t.ownerPay);
+      $("addbacks").value = Math.round(t.addback);
+    }
+    render();
+  }
+  function card(file, res, err){
+    const d = document.createElement("div"); d.className = "file";
+    if (err) { d.innerHTML = `<h3>${esc(file.name)} <span class="pill bad">not read</span></h3><div class="m">${esc(err)}</div>`; return d; }
+    if (res.kind === "stripe") {
+      const span = res.first && res.last ? `${res.first.toLocaleDateString()} – ${res.last.toLocaleDateString()}` : "dates not found (assumed 12 months)";
+      d.innerHTML = `<h3>${esc(file.name)} <span class="pill good">Stripe export</span></h3>
+        <div class="m">${res.n} charges · ${esc(span)} · ${res.months} month${res.months > 1 ? "s" : ""}${res.skipped ? ` · ${res.skipped} payouts/transfers skipped` : ""}</div>
+        <ul><li>Subscriptions &amp; invoices: <b>${usd(res.subs)}</b> → ${usd(res.subs / res.months)}/mo</li>
+        <li>Other charges (treated as clinic): <b>${usd(res.other)}</b> → ${usd(res.other * 12 / res.months)}/yr</li>
+        <li>Fees ${usd(res.fees)} (${((res.fees / Math.max(res.subs + res.other, 1)) * 100).toFixed(2)}%) · refunds ${usd(res.refunds)}</li></ul>
+        <div class="applied">Applied to revenue and fee fields. Short periods are annualized; check seasonality.</div>`;
+    } else {
+      const sums = Object.entries(res.t).filter(([, v]) => v).map(([k, v]) => `<li>${NAMES[k]}: <b>${usd(v)}</b></li>`).join("");
+      const lines = res.lines.slice(0, 40).map(([l, k, v]) => `<li><span class="m">${esc(l)}</span> → ${NAMES[k]} ${usd(v)}</li>`).join("");
+      d.innerHTML = `<h3>${esc(file.name)} <span class="pill good">Profit &amp; loss</span></h3>
+        <div class="m">Period used: ${esc(res.period)} (right-most column)</div><ul>${sums}</ul>
+        <details><summary>How each line was mapped (${res.lines.length})</summary><ul>${lines}</ul></details>
+        <div class="applied">Applied to revenue, cost and add-back fields. Review the mapping; edit any field below.</div>`;
+    }
+    return d;
+  }
+  async function handle(fileList){
+    const rep = $("report");
+    for (const f of Array.from(fileList)) {
+      try {
+        const rows = await readRows(f);
+        if (!rows.length) throw new Error("The file is empty.");
+        const res = asStripe(rows) || asPL(rows);
+        if (!res) throw new Error("Couldn't recognize this layout. Expected a Stripe export (Amount + Fee columns) or a P&L (account names with amounts).");
+        apply(res); rep.appendChild(card(f, res));
+      } catch (e) { rep.appendChild(card(f, null, e.message || String(e))); }
+    }
+  }
+  $("files").addEventListener("change", (e) => { handle(e.target.files); e.target.value = ""; });
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => handle(e.dataTransfer.files));
+
+
+  // count files read for step 2
+  new MutationObserver(() => { filesRead = document.querySelectorAll("#report .file .pill.good").length; render(); }).observe($("report"), { childList: true });
+
+  ids.forEach((k) => $(k).addEventListener("input", render));
+  ["status","stream"].forEach((k) => $(k).addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; segs[k] = b.dataset.v; paintSegs(); render(); }));
+  $("reset").addEventListener("click", () => { ids.forEach((k) => { if (k !== "vdate") $(k).value = defaults[k]; }); Object.assign(segs, segDefaults); paintSegs(); render(); });
+  $("copy").addEventListener("click", async () => { const b = $("copy"); try { await navigator.clipboard.writeText(summary()); b.textContent = "Summary copied"; } catch (e) { b.textContent = "Copy didn't work"; } setTimeout(() => b.textContent = "Copy summary", 1600); });
+  $("railToggle").addEventListener("click", (e) => { const r = $("rail"), on = !r.classList.contains("expanded"); r.classList.toggle("expanded", on); e.target.setAttribute("aria-expanded", String(on)); e.target.textContent = on ? "Show less" : "Show what every step means"; });
+  window.addEventListener("resize", () => field(calc()));
+
+  try {
+    const lis = document.querySelectorAll(".rail li"), seen = new Map();
+    const io = new IntersectionObserver((es) => {
+      es.forEach((e) => seen.set(e.target, e.isIntersecting ? e.intersectionRatio : 0));
+      let best = null, top = 0; seen.forEach((r, el) => { if (r > top) { top = r; best = el; } });
+      if (best) lis.forEach((li) => li.classList.toggle("on", li.dataset.n === best.dataset.step));
+    }, { threshold: [0, .2, .4, .6, .8, 1] });
+    document.querySelectorAll("section[data-step]").forEach((s) => io.observe(s));
+  } catch (e) {}
+
+  if (window.matchMedia("(max-width:900px)").matches) { $("railList").removeAttribute("open"); $("railToggle").hidden = true; }
+  $("railList").addEventListener("toggle", () => { $("railToggle").hidden = !$("railList").open; });
+  $("railList").querySelector("summary").addEventListener("click", (e) => { if (!window.matchMedia("(max-width:900px)").matches) e.preventDefault(); });
+  load(); paintSegs(); render();
+})();
+</script>
+</body>
+</html>
