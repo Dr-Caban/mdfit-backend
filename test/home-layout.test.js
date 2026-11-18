@@ -9,8 +9,8 @@ test("home layout: defaults, saved order, later cards and validation", () => {
   const d = homeOf({});
   assert.equal(d.sections.length, HOME_SECTIONS.length);
   assert.equal(d.suggestions, 3);
-  assert.deepEqual(d.sections.slice(0, 4).map((x) => x.id), ["gem", "care", "fromJared", "today"], "the gem card leads, then what Dr. Jared left");
-  assert.ok(d.sections.every((x) => x.state !== "hidden" && x.show), "nothing hidden until the owner hides it");
+  assert.deepEqual(d.sections.slice(0, 5).map((x) => x.id), ["gem", "care", "fromJared", "journey", "plans"], "the gem card leads, then what Dr. Jared left, then the mine; no pre-made workout card");
+  assert.deepEqual(d.sections.filter((x) => x.state === "hidden").map((x) => x.id), ["quick"], "only the quick actions grid starts hidden (the + button covers it)");
   assert.equal(d.sections.find((x) => x.id === "events").state, "folded");
   // A full saved order is kept exactly, unknown ids dropped
   const saved = homeOf({ home: { sections: [...HOME_SECTIONS].reverse().map((x) => ({ id: x.id, show: x.id !== "activity" })).concat([{ id: "gone", show: true }]), suggestions: 0 } });
@@ -23,11 +23,11 @@ test("home layout: defaults, saved order, later cards and validation", () => {
   const prev = HOME_SECTIONS[HOME_SECTIONS.findIndex((x) => x.id === "habits") - 1].id;
   assert.equal(ids.indexOf("habits"), ids.indexOf(prev) + 1, "after the card before it in the default list");
   // What the workspace may save
-  assert.deepEqual(homeIn({ sections: [{ id: "today", show: 1 }], suggestions: 2 }), { sections: [{ id: "today", state: "open" }], suggestions: 2 });
-  assert.deepEqual(homeIn({ sections: [{ id: "today", state: "folded" }] }), { sections: [{ id: "today", state: "folded" }], suggestions: 3 });
-  assert.throws(() => homeIn({ sections: [{ id: "today", state: "huge" }] }), /open, folded or hidden/);
+  assert.deepEqual(homeIn({ sections: [{ id: "plans", show: 1 }], suggestions: 2 }), { sections: [{ id: "plans", state: "open" }], suggestions: 2 });
+  assert.deepEqual(homeIn({ sections: [{ id: "plans", state: "folded" }] }), { sections: [{ id: "plans", state: "folded" }], suggestions: 3 });
+  assert.throws(() => homeIn({ sections: [{ id: "plans", state: "huge" }] }), /open, folded or hidden/);
   assert.throws(() => homeIn({ sections: [{ id: "nope" }] }), /unknown or repeated/);
-  assert.throws(() => homeIn({ sections: [{ id: "today" }, { id: "today" }] }), /unknown or repeated/);
+  assert.throws(() => homeIn({ sections: [{ id: "plans" }, { id: "plans" }] }), /unknown or repeated/);
   assert.throws(() => homeIn({ sections: [], suggestions: 99 }), /0 to 20/);
   assert.throws(() => homeIn(null), /list of sections/);
 });
@@ -52,7 +52,7 @@ test("profile layout and a member's own arrangement inside the owner's", () => {
   assert.deepEqual(p.sections.filter((x) => x.state === "open").map((x) => x.id), ["care", "membership", "patient"]);
   assert.equal(p.suggestions, undefined, "suggestions are a Home setting");
   assert.deepEqual(layoutIn("profile", { sections: [{ id: "referral", state: "open" }], suggestions: 9 }), { sections: [{ id: "referral", state: "open" }] });
-  assert.throws(() => layoutIn("profile", { sections: [{ id: "today" }] }), /Profile layout: unknown/);
+  assert.throws(() => layoutIn("profile", { sections: [{ id: "plans" }] }), /Profile layout: unknown/);
   const owner = layoutOf("home", { home: { sections: [{ id: "gem", state: "hidden" }] } });
   const mine = memberLayoutIn("home", { sections: [{ id: "gem", state: "open" }, { id: "care", state: "hidden" }, { id: "events", state: "open" }] }, owner);
   assert.deepEqual(mine.sections, [{ id: "gem", state: "hidden" }, { id: "care", state: "folded" }, { id: "events", state: "open" }]);
