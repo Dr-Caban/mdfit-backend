@@ -110,9 +110,9 @@ test("affiliates edge: subscription add-ons the owner lists earn on their own li
   const w = await world(t, { eligibleAddOns: ["sunny_unlimited", " bad key! ", ""] });
   const r = await w.s.call("GET", "/api/admin/affiliates", undefined, w.adm);
   assert.deepEqual(r.body.settings.eligibleAddOns, ["sunny_unlimited"], "junk keys are dropped");
-  const lines = [{ price: { lookup_key: "sunny_unlimited", id: "price_1" }, amount: 599, description: "Sunny unlimited" }, { price: { lookup_key: "massage_60", id: "price_2" }, amount: 9000 }];
+  const lines = [{ price: { lookup_key: "sunny_unlimited", id: "price_1" }, amount: 599, description: "Solomon unlimited" }, { price: { lookup_key: "massage_60", id: "price_2" }, amount: 9000 }];
   await w.s.hook(w.invoice({ amount_paid: 9599, lines: { data: lines } }, { kind: "addon" }, "sub_addon"));
-  assert.deepEqual(w.ledger().map((x) => [x.baseCents, x.cents, x.label]), [[599, 30, "Sunny unlimited"]]);
+  assert.deepEqual(w.ledger().map((x) => [x.baseCents, x.cents, x.label]), [[599, 30, "Solomon unlimited"]]);
   // The same add-on on a protocol subscription: nothing
   await w.s.hook(w.invoice({ amount_paid: 9599, lines: { data: lines } }, { kind: "protocol" }, "sub_protocol"));
   // An add-on line bigger than what was paid (a credit took most of it): capped at what was paid

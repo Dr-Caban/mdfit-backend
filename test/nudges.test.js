@@ -94,7 +94,7 @@ test("a class is reminded the evening before and an hour before, each once", asy
   assert.equal(hour.sentOut.filter((x) => x.title === "Class in an hour").length, 1);
 });
 
-// ---------------- Sunny's daily nudge ----------------
+// ---------------- Solomon's daily nudge ----------------
 // A movable clock (UTC stands in for the clinic's zone here), a presence store, and a stubbed weather service.
 function sunny({ clientsList = [], date = "2026-11-11", hour = 8, weather = { cloud_cover: 10, precipitation: 0, is_day: 1 }, pushed = {} } = {}) {
   const clock = { date, hour };
@@ -118,7 +118,7 @@ function sunny({ clientsList = [], date = "2026-11-11", hour = 8, weather = { cl
 }
 const member = (extra = {}) => ({ id: "c1", name: "Quinn Zebulon", createdAt: "2026-10-01T12:00:00Z", workouts: [{ date: "2026-11-10", kind: "normal", minutes: 20, exercises: 5, completedAt: "2026-11-10T08:10:00Z" }], ...extra });
 
-test("Sunny: a clear Sarasota morning gets the sunlight line, once a day, after the weather is in", async () => {
+test("Solomon: a clear Sarasota morning gets the sunlight line, once a day, after the weather is in", async () => {
   const h = sunny({ clientsList: [member()] });
   h.n.sweep();                                     // starting point
   h.n.sweep();                                     // the weather request is still out: wait, don't guess
@@ -126,14 +126,14 @@ test("Sunny: a clear Sarasota morning gets the sunlight line, once a day, after 
   await h.n.prefetchWeather("2026-11-11");
   h.n.sweep();
   assert.equal(h.sunnyOut().length, 1);
-  assert.equal(h.sunnyOut()[0].title, "Sunny");
+  assert.equal(h.sunnyOut()[0].title, "Solomon");
   assert.match(h.sunnyOut()[0].body, /Florida sunlight|Gorgeous morning in Sarasota/);
   h.n.sweep(); h.clock.hour = 9; h.n.sweep();
   assert.equal(h.sunnyOut().length, 1, "one a day");
   assert.equal(h.calls(), 1, "the weather is asked once a day");
 });
 
-test("Sunny: a cloudy morning, or weather that cannot be read, gets a regular line", async () => {
+test("Solomon: a cloudy morning, or weather that cannot be read, gets a regular line", async () => {
   for (const weather of [{ cloud_cover: 90, precipitation: 0, is_day: 1 }, { cloud_cover: 0, precipitation: 1.2, is_day: 1 }, "fail"]) {
     const h = sunny({ clientsList: [member()], weather });
     await h.ready(); h.n.sweep();
@@ -142,14 +142,14 @@ test("Sunny: a cloudy morning, or weather that cannot be read, gets a regular li
   }
 });
 
-test("Sunny: never in quiet hours, never on a day something else was pushed, never at the wrong hour", async () => {
+test("Solomon: never in quiet hours, never on a day something else was pushed, never at the wrong hour", async () => {
   const early = sunny({ clientsList: [member()], hour: 7 });
   await early.ready(); early.n.sweep();
   assert.equal(early.sunnyOut().length, 0, "before 8 AM");
   const busy = sunny({ clientsList: [member()], pushed: { c1: "2026-11-11" } });
   await busy.ready(); busy.n.sweep();
   assert.equal(busy.sunnyOut().length, 0, "a visit reminder or a message already went today");
-  // someone who trains in the afternoon hears from Sunny then, not at 8
+  // someone who trains in the afternoon hears from Solomon then, not at 8
   const pm = (d) => ({ date: d, kind: "normal", minutes: 20, exercises: 5, completedAt: `${d}T15:20:00Z` });
   const h = sunny({ clientsList: [member({ workouts: [pm("2026-11-01"), pm("2026-11-05"), pm("2026-11-09")] })] });
   await h.ready(); h.n.sweep();
@@ -158,7 +158,7 @@ test("Sunny: never in quiet hours, never on a day something else was pushed, nev
   assert.equal(h.sunnyOut().length, 1, "at their usual hour");
 });
 
-test("Sunny: someone with a streak worth keeping gets only the evening streak nudge", async () => {
+test("Solomon: someone with a streak worth keeping gets only the evening streak nudge", async () => {
   const d = (x) => ({ date: x, kind: "normal", minutes: 20, exercises: 5, completedAt: `${x}T08:10:00Z` });
   const h = sunny({ clientsList: [member({ workouts: [d("2026-11-08"), d("2026-11-09"), d("2026-11-10")] })] });
   await h.ready(); h.n.sweep();
@@ -169,7 +169,7 @@ test("Sunny: someone with a streak worth keeping gets only the evening streak nu
   assert.equal(h.sentOut.length, 1, "one push that day, in all");
 });
 
-test("Sunny: the comeback ladder goes out at 2, 7, 14 and 30 days, once each, then stays quiet", async () => {
+test("Solomon: the comeback ladder goes out at 2, 7, 14 and 30 days, once each, then stays quiet", async () => {
   const h = sunny({ clientsList: [member()], date: "2026-11-12" });     // last active Nov 10
   await h.ready(); h.n.sweep();
   const said = () => h.sunnyOut().map((x) => x.body);
@@ -185,17 +185,17 @@ test("Sunny: the comeback ladder goes out at 2, 7, 14 and 30 days, once each, th
   assert.equal(said().length, 5); assert.match(said()[4], /We saved your spot/);
 });
 
-test("Sunny: new picks since they last opened the app, said as a number", async () => {
+test("Solomon: new picks since they last opened the app, said as a number", async () => {
   const c = member({ suggested: { programs: [{ id: "p1", at: "2026-11-10T20:00:00Z" }], videos: [{ id: "v1", at: "2026-11-10T20:00:00Z" }], guides: [], tips: [] } });
   const h = sunny({ clientsList: [c] });
   h.data.presence = { c1: { lastAt: Date.parse("2026-11-10T19:00:00Z"), days: { "2026-11-10": { sessions: 1 } } } };
   await h.ready(); h.n.sweep();
-  assert.equal(h.sunnyOut().length, 1); assert.match(h.sunnyOut()[0].body, /^Sunny found 2 new picks for you/);
+  assert.equal(h.sunnyOut().length, 1); assert.match(h.sunnyOut()[0].body, /^Solomon found 2 new picks for you/);
   h.clock.date = "2026-11-12"; await h.n.prefetchWeather("2026-11-12"); h.n.sweep();
   assert.doesNotMatch(h.sunnyOut()[1].body, /new picks/, "the same picks are not announced twice");
 });
 
-test("Sunny: 'streaks only' keeps just the evening streak nudge; 'off' sends none (class reminders still go)", async () => {
+test("Solomon: 'streaks only' keeps just the evening streak nudge; 'off' sends none (class reminders still go)", async () => {
   const d = (x) => ({ date: x, kind: "normal", minutes: 20, exercises: 5, completedAt: `${x}T08:10:00Z` });
   const streaky = { workouts: [d("2026-11-08"), d("2026-11-09"), d("2026-11-10")] };
   const s = sunny({ clientsList: [member({ ...streaky, appPrefs: { nudges: "streaks" } })] });
@@ -212,7 +212,7 @@ test("Sunny: 'streaks only' keeps just the evening streak nudge; 'off' sends non
   assert.equal(off.sentOut.filter((x) => x.title === "Class tomorrow").length, 1, "class reminders are not nudges");
 });
 
-test("Sunny: nothing from the member's record reaches a lock screen but their first name", async () => {
+test("Solomon: nothing from the member's record reaches a lock screen but their first name", async () => {
   const private_ = { firstName: "Quinn", painLog: [{ date: "2026-11-01", area: "Knee", level: 7, note: "meniscus after surgery", createdAt: "2026-11-01T08:00:00Z" }],
     assignedPrograms: [{ id: "knee-rehab", note: "post-op protocol" }], suggested: { programs: [{ id: "knee-rehab", at: "2026-11-10T20:00:00Z" }], videos: [], guides: [], tips: [{ id: "t1", text: "ice your knee", at: "2026-11-10T20:00:00Z" }] } };
   const out = [];
@@ -227,7 +227,7 @@ test("Sunny: nothing from the member's record reaches a lock screen but their fi
   for (const p of out) assert.doesNotMatch(`${p.title} ${p.body}`, /knee|menisc|surgery|post-op|rehab|protocol|pain|ice your|level|7\/10|lower back|back pain|shoulder|\bhip|neck|ankle/i, p.body);
 });
 
-test("Sunny: the owner's numbers count what went out, what was opened within 6 hours, and who came back", async () => {
+test("Solomon: the owner's numbers count what went out, what was opened within 6 hours, and who came back", async () => {
   const h = sunny({ clientsList: [member()], date: "2026-11-12" });
   await h.ready(); h.n.sweep();                                       // a comeback nudge at 08:05
   assert.match(h.sunnyOut()[0].body, /We saved your spot/);

@@ -940,6 +940,11 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       logger.warn("login_failed", { email: mask(email || "-") });
       return res.status(401).json({ error: "Wrong email or password." });
     }
+    finishLogin(req, res, { email, isOwner, person, via: "password" });
+  });
+  // The rest of a sign-in, whichever way the person proved who they are: the emailed code when two-step sign-in is
+  // on, then the session.
+  function finishLogin(req, res, { email, isOwner, person, via }) {
     if (mfaOn()) {
       if (!req.body.code) {
         emailCode("login", email);
@@ -956,9 +961,35 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     emailFails.reset(email);
     const exp = Date.now() + SESSION_HOURS * 3600e3;
     if (!isOwner) { staff.noteLogin(person.id); req.loginActor = `admin:${email}`; }
-    activity("login", { email, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
+    activity("login", { email, via, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
     const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", exp };
     res.json({ token: signToken(payload, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
+  }
+  // Sign in with Google for the owner and staff (the workspace at /admin and the manager's console at /manager).
+  // Google proves the address; it must be the owner's ADMIN_EMAIL or an active staff account's email, verified by
+  // Google. It never creates an account, and two-step sign-in still applies.
+  app.post("/api/admin/login/google", async (req, res) => {
+    if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
+    const clientId = process.env.GOOGLE_CLIENT_ID || cfg.googleClientId || "";
+    if (!clientId) return res.status(501).json({ error: "Google sign-in is not configured." });
+    if (loginFails.blocked(req.ip)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const credential = String((req.body && req.body.credential) || "");
+    if (!credential) return res.status(400).json({ error: "Missing Google credential." });
+    let g;
+    try { g = await (cfg.verifyGoogleToken || cl.verifyGoogleToken)(credential, clientId); }
+    catch (e) { loginFails.hit(req.ip); logger.warn("admin_google_failed", { error: e.message }); return res.status(401).json({ error: "Google sign-in failed. Try again." }); }
+    const email = String(g.email || "").trim().toLowerCase();
+    if (!email || g.email_verified !== true && g.email_verified !== "true") { loginFails.hit(req.ip); return res.status(401).json({ error: "That Google account has no verified email." }); }
+    if (emailFails.blocked(email)) return res.status(429).json({ error: "Too many attempts. Try again in 15 minutes." });
+    const isOwner = email === cfg.adminEmail;
+    const rec = isOwner ? null : staff.byEmail(email);
+    const person = isOwner ? { id: "", email } : rec && rec.active === true ? rec : null;
+    if (!person) {
+      loginFails.hit(req.ip); emailFails.hit(email);
+      logger.warn("admin_google_no_account", { email: mask(email) });
+      return res.status(403).json({ error: `${email} isn't the owner or a staff account. Sign in with the Google account the owner added, or with your password.` });
+    }
+    finishLogin(req, res, { email, isOwner, person, via: "google" });
   });
 
   const admin = express.Router();
@@ -1500,13 +1531,13 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   app.set("remindVisits", () => { try { push.remind(appointments()); } catch (err) { logger.warn("push_remind_failed", { error: err.message }); } });
   // Achievements (a new gem, a badge, the daily goal), the evening streak nudge, and group-class reminders.
   // One sweep, every minute; everything it sends is recorded so nothing goes out twice.
-  // Also Sunny's one daily nudge (comebacks, new picks, the Sarasota-sunlight morning line): lib/nudges.js.
+  // Also Solomon's one daily nudge (comebacks, new picks, the Sarasota-sunlight morning line): lib/nudges.js.
   const nudges = require("./lib/nudges").createNudges({
     store, clients: cl.clients, save: cl.save, push, rewardsOf: cl.rewardsOf,
     nowParts, zonedToUtc, prettyTime, tz: cfg.tz, now: cfg.now, logger,
     pushedOn: (id) => (push.pushedOn ? push.pushedOn(id) : ""), fetchImpl: cfg.nudgeWeather === false ? null : undefined
   });
-  // What Sunny's nudges did, for the owner (Insights -> Sunny): sent, opened within 6 hours, came back within 2 days
+  // What Solomon's nudges did, for the owner (Insights -> Solomon): sent, opened within 6 hours, came back within 2 days
   admin.get("/guide/nudges", (req, res) => res.json(nudges.stats(req.query.days)));
   app.set("nudge", () => {
     try {
@@ -1551,6 +1582,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // Affiliate commissions on subscriptions (lib/affiliates.js): the webhook in lib/payments.js hands it paid invoices,
   // refunds and Express account changes through app.get("affiliates")
   require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl });
+  // The revenue ledger and the manager's revenue share (Agreement Section 4); /api/admin/partner* screens
+  require("./lib/partner-share").mountPartnerShare({ app, admin, store, cfg, logger, audit, notify, clients: cl.clients, staff });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
   // A patient scheduling and paying for their own video visit (Medical record). The slot is held while Stripe takes the
   // payment, so two patients can never land on the same time, and a checkout nobody finishes lets the hold lapse.
@@ -1620,7 +1653,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
-  // Sunny in the member app: tokens counted per day on the server (unlimited with full access:
+  // Solomon in the member app: tokens counted per day on the server (unlimited with full access:
   // membership, active treatment plan or in-clinic patient), suggestions kept for Home, reminders, looks, the owner's numbers
   // (AI answers reuse the scribe's connection and only run on a service that signs a business associate agreement: lib/guide-ai.js)
   const guideAI = require("./lib/guide-ai").createGuideAI({ cfg, store, logger });

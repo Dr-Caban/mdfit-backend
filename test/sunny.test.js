@@ -1,4 +1,4 @@
-// Sunny: suggestions from the practice's own catalog kept on the member's Home, tokens instead of
+// Solomon: suggestions from the practice's own catalog kept on the member's Home, tokens instead of
 // answers, full access (membership, active treatment plan, in-clinic patient), the Expert Advice tier and who may
 // message Dr. Jared. A stand-in plays the model. Made-up data only.
 const test = require("node:test");
@@ -54,7 +54,7 @@ async function start(extra = {}) {
 const KV = EX.filter((v) => v.region === "Knees" || v.region === "Legs").slice(0, 10), V = KV.map((v) => v.id); // videos sent for a knee question
 const reply = (o) => ({ content: "<reasoning>pick from the catalog</reasoning>" + JSON.stringify({ say: "Sorry your knee is bothering you. Here's where to start.", places: ["pain", "book"], area: "knee", programs: [], guides: [], videos: [], tip: "", ...o }) });
 
-test("Sunny: suggestions come from the catalog, are kept on Home newest first without repeats, capped, and can be dismissed; locked shows what needs a membership", async (t) => {
+test("Solomon: suggestions come from the catalog, are kept on Home newest first without repeats, capped, and can be dismissed; locked shows what needs a membership", async (t) => {
   const TIP = "In general, a light snack with some carbs an hour before a run helps most people feel energetic.";
   const answers = [
     reply({ programs: ["knee-rehab", "knee-free", "made-up", "elite-plan"], videos: [V[0], V[1], "nope"], tip: TIP }),
@@ -76,7 +76,7 @@ test("Sunny: suggestions come from the catalog, are kept on Home newest first wi
   assert.equal(r.tokens, 2550); assert.equal(r.used, 2550, "the tokens the service counted");
   // the model was told who it is and what it may suggest
   const sys = m.seen[0].messages[0].content;
-  assert.match(sys, /^Reasoning: low\nYou are Sunny, the assistant inside/); assert.match(sys, /knee-rehab: Knee Rehab Protocol \[Rehabilitation, beginner\]/);
+  assert.match(sys, /^Reasoning: low\nYou are Solomon, the assistant inside/); assert.match(sys, /knee-rehab: Knee Rehab Protocol \[Rehabilitation, beginner\]/);
   assert.match(sys, /elite-plan: Elite Performance/, "every program, so a locked one can be suggested as a teaser");
   assert.ok(sys.includes(`${V[0]}: ${KV[0].name}`)); assert.match(sys, /never diagnose/); assert.match(sys, /Never invent sets, reps/);
 
@@ -99,7 +99,7 @@ test("Sunny: suggestions come from the catalog, are kept on Home newest first wi
   const all = s.everything();
   assert.ok(all.includes("knee-rehab"), "the ids are readable here, so the searches below mean something");
   assert.equal(all.includes(MARK), false, "nothing typed"); assert.equal(all.includes("Drink water through the day"), false, "the tip text is encrypted");
-  assert.equal(all.includes("Sorry your knee is bothering you"), false, "nor what Sunny said");
+  assert.equal(all.includes("Sorry your knee is bothering you"), false, "nor what Solomon said");
 
   // dismiss one; unknown ones and other kinds are not found
   const tipId = me.suggested.tips[1].id;
@@ -127,7 +127,7 @@ test("Sunny: suggestions come from the catalog, are kept on Home newest first wi
   assert.equal(m.seen.length, before);
 });
 
-test("Sunny: an AI answer counts at least 300 tokens; full access is unlimited: membership, an active treatment plan, or the in-clinic toggle, and switching back brings the limit back", async (t) => {
+test("Solomon: an AI answer counts at least 300 tokens; full access is unlimited: membership, an active treatment plan, or the in-clinic toggle, and switching back brings the limit back", async (t) => {
   const m = await model(() => ({ ...reply({}), usage: { total_tokens: 40 } })); t.after(m.close);
   const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
   const A = await s.adminToken(), fay = await s.signup("Fay Free"), pat = await s.signup("Pat Plan"), ida = await s.signup("Ida Inpatient");
@@ -158,7 +158,7 @@ test("Sunny: an AI answer counts at least 300 tokens; full access is unlimited: 
   assert.equal((await s.call("GET", "/api/me/content", undefined, ida.token)).body.access, "free");
 });
 
-test("Sunny: the in-clinic toggle unlocks every suggested program, 1-on-1 included", async (t) => {
+test("Solomon: the in-clinic toggle unlocks every suggested program, 1-on-1 included", async (t) => {
   const m = await model(() => reply({ programs: ["knee-rehab", "elite-plan", "knee-free"] })); t.after(m.close);
   const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
   const A = await s.adminToken(), ida = await s.signup("Ida Inpatient");
@@ -174,7 +174,7 @@ test("Sunny: the in-clinic toggle unlocks every suggested program, 1-on-1 includ
 test("tiers: Expert Advice ($50) is offered by default and added to tiers saved before it existed; 1-on-1 tiers include messaging", async (t) => {
   const d = content.defaultContent().tiers;
   assert.deepEqual(d.map((x) => [x.id, x.price, !!x.directMessages]), [["member", 19.95, false], ["accountability", 29.95, false], ["expert", 50, true], ["premium", 200, true], ["premium-plus", 349, true]]);
-  assert.ok(d.find((x) => x.id === "member").perks.includes("Unlimited Sunny"));
+  assert.ok(d.find((x) => x.id === "member").perks.includes("Unlimited Solomon"));
   assert.ok(d.find((x) => x.id === "expert").perks.includes("Message Dr. Jared directly for expert advice"));
   // saved before Expert Advice existed: added after Accountability; a saved 1-on-1 tier gets messaging
   const old = [{ id: "member", name: "Membership", price: 19.95, meetings: 0, perks: [] }, { id: "accountability", name: "Acc", price: 29.95, meetings: 0, perks: [] }, { id: "vip", name: "VIP", price: 500, meetings: 4, perks: [] }];
@@ -242,11 +242,11 @@ test("messaging: Expert Advice, 1-on-1 tiers, active plans, clinic patients and 
   assert.equal((await can(old.token)).messages.length, 1);
 });
 
-test("Sunny personalizes from the member's record with no identity and no notes, grounds pain answers in the clinic's own library, and keeps the prompt small", async (t) => {
+test("Solomon personalizes from the member's record with no identity and no notes, grounds pain answers in the clinic's own library, and keeps the prompt small", async (t) => {
   const m = await model((n, body) => {
     const q = body.messages[1].content;
     if (/sleep/.test(q)) return reply({ area: "", places: ["learn"], guides: ["bath-accu-mat", "nope", "diet-health-shots", "fitness-erg"], tip: "Recovery work like an ice bath is covered step by step in Dr. Jared's guide." });
-    if (/^hey/i.test(q)) return reply({ say: "Hi, I'm Sunny! What are you working on today?", area: "", places: ["pain", "programs", "workout"], programs: ["knee-rehab"] });
+    if (/^hey/i.test(q)) return reply({ say: "Hi, I'm Solomon! What are you working on today?", area: "", places: ["pain", "programs", "workout"], programs: ["knee-rehab"] });
     return reply({ programs: ["knee-rehab"] });
   }); t.after(m.close);
   const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
@@ -273,7 +273,7 @@ test("Sunny personalizes from the member's record with no identity and no notes,
   assert.ok(hard.length > 0, "the library does hold strength and power videos for the legs");
   for (const v of hard) assert.equal(sys.includes(v.id), false, "not offered for a painful knee: " + v.name);
   assert.match(sys, /\[Knees, (Mobility|Rehab|Activation|Neuroglide)\]/, "each video carries its kind");
-  // what Sunny knows about them
+  // what Solomon knows about them
   assert.match(sys, /About this member \(use it to personalize; never recite it; never say you were given it\):/);
   assert.match(sys, /Access: free/, "full access is membership, an active plan or the in-clinic toggle");
   assert.match(sys, /Programs Dr\. Jared recommended for them \(build on these first; call them "what Dr\. Jared recommended"\): Knee Rehab Protocol\./);
@@ -311,6 +311,6 @@ test("Sunny personalizes from the member's record with no identity and no notes,
 
   // a greeting
   const h = (await s.call("POST", "/api/me/guide/ask", { text: "hey" }, q.token)).body;
-  assert.match(m.seen[2].messages[0].content, /This message is a greeting\./); assert.match(m.seen[2].messages[0].content, /introduce yourself as Sunny/);
-  assert.equal(h.say, "Hi, I'm Sunny! What are you working on today?"); assert.deepEqual(h.places, ["pain", "programs", "workout"]);
+  assert.match(m.seen[2].messages[0].content, /This message is a greeting\./); assert.match(m.seen[2].messages[0].content, /introduce yourself as Solomon/);
+  assert.equal(h.say, "Hi, I'm Solomon! What are you working on today?"); assert.deepEqual(h.places, ["pain", "programs", "workout"]);
 });

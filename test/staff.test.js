@@ -123,7 +123,7 @@ test("create, list, update, reset and deactivate; nothing is ever deleted", asyn
   const list = await s.call("GET", "/api/admin/staff", undefined, tok);
   assert.equal(list.status, 200);
   assert.equal(list.body.staff.length, 1);
-  assert.deepEqual(Object.keys(list.body.roles).sort(), ["admin", "clinician", "frontdesk"]);
+  assert.deepEqual(Object.keys(list.body.roles).sort(), ["admin", "clinician", "developer", "frontdesk", "manager"]);
   assert.equal(list.body.roles.admin.label, "Administrator");
   assert.deepEqual(list.body.permissions.map((p) => p.key), PERMISSION_KEYS);
   for (const p of list.body.permissions) assert.ok(p.label && p.description, p.key);
@@ -469,4 +469,72 @@ test("every staff change and every sign-in is in the audit ledger, and the chain
   assert.equal(v.status, 200);
   assert.equal(v.body.ok, true, v.body.error);
   assert.equal(hasHash(entries), false, "no password hash ever reaches the ledger");
+});
+
+// ---------------------------------------------------------------- manager and developer (Agreement Section 11.2)
+
+test("manager and developer accounts can never reach patient data, whoever asks; the developer can't reach money either", async (t) => {
+  const s = await start(); t.after(s.close);
+  const tok = await s.ownerToken();
+  const mgr = await s.makeStaff({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
+  assert.deepEqual(mgr.record.permissions, ["partner", "content"]);
+  const dev = await s.makeStaff({ name: "Dev Person", email: "dev@example.com", role: "developer" });
+  assert.deepEqual(dev.record.permissions, ["content"]);
+  // Not even the owner can give them patient data, or the developer money
+  for (const p of ["charts", "clients", "messages", "scheduling", "billing", "security", "reviews", "staff"]) {
+    const r = await s.call("PUT", `/api/admin/staff/${mgr.record.id}`, { permissions: ["partner", p] }, tok);
+    assert.equal(r.status, 400, `manager + ${p}`); assert.match(r.body.error, /can never have/);
+  }
+  for (const p of ["partner", "payouts", "charts", "billing"]) {
+    const r = await s.call("PUT", `/api/admin/staff/${dev.record.id}`, { permissions: ["content", p] }, tok);
+    assert.equal(r.status, 400, `developer + ${p}`);
+  }
+  const made = await s.call("POST", "/api/admin/staff", { name: "X", email: "x@example.com", role: "developer", permissions: ["charts"], password: "staff-pass-1234" }, tok);
+  assert.equal(made.status, 400, "not at creation either");
+  // What the gate does with their tokens
+  for (const [path, who, want] of [["/api/admin/clients", mgr, 403], ["/api/admin/emr/patients", mgr, 403], ["/api/admin/payments", mgr, 403], ["/api/admin/audit", mgr, 403],
+    ["/api/admin/clients", dev, 403], ["/api/admin/affiliates", dev, 403], ["/api/admin/partner/share", dev, 403], ["/api/admin/partner-share/settings", mgr, 403]])
+    assert.equal((await s.call("GET", path, undefined, who.token)).status, want, `${who.email} ${path}`);
+  // The owner may still move them to a role that does see patient data, deliberately and on the record
+  const moved = await s.call("PUT", `/api/admin/staff/${dev.record.id}`, { role: "clinician" }, tok);
+  assert.equal(moved.status, 200); assert.ok(moved.body.staff.permissions.includes("charts"));
+  // Administrators no longer get the partner console or affiliate payouts by default
+  const adm = await s.makeStaff({ email: "office@example.com", role: "admin" });
+  assert.equal(adm.record.permissions.includes("partner"), false); assert.equal(adm.record.permissions.includes("payouts"), false);
+});
+
+// ---------------------------------------------------------------- Sign in with Google (owner and staff)
+
+test("Sign in with Google: the owner's address and active staff accounts get in; anyone else, an unverified email or a bad token does not", async (t) => {
+  const tokens = {
+    owner: { email: OWNER.toUpperCase(), email_verified: true },
+    josh: { email: "josh@example.com", email_verified: true },
+    stranger: { email: "someone@example.com", email_verified: true },
+    unverified: { email: "josh@example.com", email_verified: false },
+    off: { email: "gone@example.com", email_verified: true }
+  };
+  const s = await start({ googleClientId: "gid.apps.googleusercontent.com", verifyGoogleToken: async (cred, aud) => { assert.equal(aud, "gid.apps.googleusercontent.com"); if (!tokens[cred]) throw new Error("Invalid signature"); return tokens[cred]; } });
+  t.after(s.close);
+  const g = (credential) => s.call("POST", "/api/admin/login/google", { credential });
+  // The owner, by the address in ADMIN_EMAIL (case doesn't matter)
+  let r = await g("owner");
+  assert.equal(r.status, 200);
+  assert.equal((await s.call("GET", "/api/admin/me", undefined, r.body.token)).body.isOwner, true);
+  // A staff account the owner made: same permissions as a password sign-in
+  await s.makeStaff({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
+  r = await g("josh");
+  assert.equal(r.status, 200);
+  const me = (await s.call("GET", "/api/admin/me", undefined, r.body.token)).body;
+  assert.equal(me.role, "manager"); assert.equal(me.permissions.includes("charts"), false);
+  // Nobody else; Google never creates an account
+  assert.equal((await g("stranger")).status, 403);
+  assert.equal((await g("unverified")).status, 401);
+  assert.equal((await g("forged")).status, 401);
+  assert.equal((await g("")).status, 400);
+  // A switched-off staff account can't come back in through Google
+  const gone = await s.makeStaff({ name: "Gone", email: "gone@example.com", role: "frontdesk" });
+  assert.equal((await g("off")).status, 200);
+  const tok = await s.ownerToken();
+  assert.equal((await s.call("DELETE", `/api/admin/staff/${gone.record.id}`, undefined, tok)).status, 200);
+  assert.equal((await g("off")).status, 403);
 });

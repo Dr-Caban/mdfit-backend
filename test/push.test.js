@@ -73,7 +73,7 @@ test("Android (FCM) tokens register alongside iPhone tokens", () => {
   assert.equal(store.read("devices", []).length, 0);
 });
 
-test("the clinic day each member was last pushed is remembered, so Sunny's nudge never doubles up a day", () => {
+test("the clinic day each member was last pushed is remembered, so Solomon's nudge never doubles up a day", () => {
   const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), "push-")));
   const push = createPush({ key: key(), keyId: "K1", teamId: "T1", store, nowParts, zonedToUtc, tz: "UTC" });
   assert.equal(push.pushedOn("a"), "");

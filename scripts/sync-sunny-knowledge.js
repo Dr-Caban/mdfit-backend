@@ -1,5 +1,5 @@
 // Build lib/sunny-knowledge.json from the clinic's own published pain data in the frontend (the pain tool's muscle
-// referral map, painmuscles.js, and Dr. Jared's pain-relief tracks, paintracks.js), so Sunny answers from the
+// referral map, painmuscles.js, and Dr. Jared's pain-relief tracks, paintracks.js), so Solomon answers from the
 // practice's clinical library rather than a model's general knowledge. Per body area: the spots a member might mean
 // with the muscles that most often refer pain there (first = most common), and the matching pain-relief tracks.
 // Usage: node scripts/sync-sunny-knowledge.js [path/to/mdfit-frontend]
@@ -12,7 +12,7 @@ const { MUSCLES, SPOTS, BODY_REGIONS } = box.window.MDFitMuscles;
 const TRACKS = (box.window.MDFitTracks && (box.window.MDFitTracks.TRACKS || box.window.MDFitTracks.tracks)) || [];
 if (!MUSCLES || !SPOTS || !TRACKS.length) throw new Error("Pain data not found in " + root);
 
-// Sunny's areas (lib/guide-ai.js AREAS) -> the pain tool's spot groups ("group" or "group|Spot label")
+// Solomon's areas (lib/guide-ai.js AREAS) -> the pain tool's spot groups ("group" or "group|Spot label")
 const AREAS = {
   knee: ["knee", "calf|Back of the knee", "hamstring|Back of the knee"],
   back: ["low-back", "upper-back"],

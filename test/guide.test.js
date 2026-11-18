@@ -186,7 +186,7 @@ test("guide: looks are checked and kept on the account", async (t) => {
   const again = (await s.call("POST", "/api/clients/login", { email: "fay.free@example.com", password: "made-up-pass-1" })).body;
   assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all" }, "the same on another device");
   assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all" });
-  // Reminders from Sunny: all (default), the evening streak one only, or off
+  // Reminders from Solomon: all (default), the evening streak one only, or off
   assert.equal((await s.call("PUT", u, { nudges: "streaks" }, fay.token)).body.prefs.nudges, "streaks");
   assert.equal((await s.call("PUT", u, { nudges: "off" }, fay.token)).body.prefs.nudges, "off");
   assert.equal((await s.call("PUT", u, { nudges: "loud" }, fay.token)).status, 400);
