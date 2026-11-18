@@ -1297,7 +1297,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     let id;
     try { id = await calsync.addEvent({ title, date: b.date, time: b.time, minutes, note }); }
     catch (err) { logger.error("gcal_add_event_failed", { error: err.message }); return res.status(502).json({ error: "Google Calendar didn't accept the event. Check that the calendar is shared with edit access." }); }
-    if (audit) audit.record({ actor: "admin", action: "calendar.event_added", subject: "", ip: req.ip, meta: { date: b.date, minutes } });
+    if (audit) audit.record({ actor: `admin:${req.admin}`, action: "calendar.event_added", subject: "", ip: req.ip, meta: { date: b.date, minutes } });
     res.status(201).json({ ok: true, id: id || null });
   });
   admin.post("/calsync/test", async (req, res) => {
