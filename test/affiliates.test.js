@@ -60,13 +60,18 @@ test("affiliates: join, earn 5% of a referred friend's subscription, hold, Strip
   assert.deepEqual(s.readJson("commissions"), []);
   assert.equal((await s.call("POST", "/api/me/affiliate/join", { agree: true }, pat)).status, 409);
 
-  // The owner switches it on. The clinical tiers cannot be made eligible, whatever is sent.
+  // The owner switches it on. A tier that does not exist cannot be made eligible; every Recurring Membership tier
+  // can (Agreement 4.3, Exhibit A: "including plans with remote one-on-one sessions"), though none is until ticked.
   assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true })).status, 401, "owner only");
-  let r = await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true, eligibleTiers: ["member", "expert"] }, adm);
-  assert.equal(r.status, 400); assert.match(r.body.error, /access to a clinician/);
+  let r = await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "no-such-tier"] }, adm);
+  assert.equal(r.status, 400); assert.match(r.body.error, /no subscription tier/);
+  r = await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "accountability", "expert"] }, adm);
+  assert.equal(r.status, 200); assert.deepEqual(r.body.settings.eligibleTiers, ["member", "accountability", "expert"]);
+  assert.equal(JSON.stringify(r.body).includes("clinical"), false, "no tier is marked as unable to earn");
+  await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "accountability"] }, adm);
   r = await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true, ratePct: 5, holdDays: 7, minPayoutCents: 2500 }, adm);
   assert.equal(r.status, 200); assert.deepEqual(r.body.settings.eligibleTiers, ["member", "accountability"]);
-  assert.deepEqual(r.body.tiers.filter((x) => x.clinical).map((x) => x.id), ["expert", "premium", "premium-plus"]);
+  assert.deepEqual(r.body.tiers.filter((x) => x.clinical).map((x) => x.id), [], "no tier is fenced off; the owner chooses which earn");
   assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 51 }, adm)).status, 400);
 
   // Sam pays before Pat has joined: no commission (the programme is opt-in)
@@ -169,8 +174,4 @@ test("affiliates: the free month for a referral can be switched off once commiss
   P = s.readJson("clients").find((c) => c.email === "pat@example.com");
   assert.equal(P.referrals, 2, "the referral is still counted");
   assert.equal(P.membership.until, s.readJson("clients").find((c) => c.email === "pat@example.com").membership.until);
-  const { clinicalTier } = require("../lib/affiliates");
-  assert.equal(clinicalTier({ id: "member", meetings: 0 }), false);
-  assert.equal(clinicalTier({ id: "custom", directMessages: true }), true);
-  assert.equal(clinicalTier({ id: "vip", meetings: 1 }), true);
 });
