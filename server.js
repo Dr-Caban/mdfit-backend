@@ -1656,7 +1656,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
   // The Progress calendar: invoices, card payments and membership dates, and a live "calendar_changed" to the member's
   // app whenever a visit, class, workout, payment or chart entry of theirs changes (lib/member-calendar.js)
-  require("./lib/member-calendar").mountMemberCalendar({ app, me: cl.me, store, cfg, clients: cl.clients, logger,
+  require("./lib/member-calendar").mountMemberCalendar({ app, me: cl.me, store, cfg, clients: cl.clients, save: cl.save, logger, zonedToUtc,
     tiers: () => { const p = app.get("payApi"); return p && p.tiers ? p.tiers() : []; } });
   // Solomon in the member app: tokens counted per day on the server (unlimited with full access:
   // membership, active treatment plan or in-clinic patient), suggestions kept for Home, reminders, looks, the owner's numbers
