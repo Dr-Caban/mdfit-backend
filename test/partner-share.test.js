@@ -65,10 +65,24 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   const other = await s.staffLogin({ name: "Other Manager", email: "other@example.com", role: "manager" });
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, other.token)).status, 403);
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, s.owner)).status, 403);
-  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { managerStaffId: other.id }, s.owner)).status, 400, "the share can only go to the MANAGER_EMAIL account");
+  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", managerStaffId: other.id }, s.owner)).status, 400, "the share can only go to the MANAGER_EMAIL account");
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, mgr.token)).status, 403, "the manager can't set their own share");
-  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { managerStaffId: dev.id }, s.owner)).status, 400, "only a Manager account can hold the share");
-  let r = await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, s.owner);
+  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", managerStaffId: dev.id }, s.owner)).status, 400, "only a Manager account can hold the share");
+  // The terms are preset by the agreement: being signed in as the owner is not enough to change them
+  let locked = await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, s.owner);
+  assert.equal(locked.status, 403); assert.equal(locked.body.needsPassword, true);
+  locked = await s.call("PUT", "/api/admin/partner-share/settings", { password: "not-the-password", activePct: 40 }, s.owner);
+  assert.equal(locked.status, 403);
+  // and even with the password, the shares themselves are the agreement's: 15% active, 5% continuing (10% under 8.2)
+  for (const bad of [{ activePct: 20 }, { activePct: 10 }, { continuingPct: 7 }, { continuingPct: 0 }]) {
+    const no = await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", ...bad }, s.owner);
+    assert.equal(no.status, 400, JSON.stringify(bad)); assert.match(no.body.error, /agreement|Section/);
+  }
+  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", continuingPct: 10 }, s.owner)).status, 200, "the Section 8.2 remedy is allowed");
+  assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", continuingPct: 5 }, s.owner)).status, 200);
+  const untouched = (await s.call("GET", "/api/admin/partner-share/settings", undefined, s.owner)).body;
+  assert.equal(untouched.enabled, false); assert.equal(untouched.activePct, 15); assert.equal(untouched.continuingPct, 5);
+  let r = await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", enabled: true, managerStaffId: mgr.id }, s.owner);
   assert.equal(r.status, 200); assert.equal(r.body.activePct, 15); assert.equal(r.body.autoPay, false);
 
   // Payments, one of each kind
@@ -116,7 +130,7 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   assert.equal((await s.call("POST", "/api/admin/partner/stripe/session", {}, s.owner)).status, 403, "the owner doesn't open the manager's bank details");
   await s.call("GET", "/api/admin/partner/stripe/status", undefined, mgr.token);
   // The owner switches automatic payouts on: recorded with who and when
-  r = await s.call("PUT", "/api/admin/partner-share/settings", { autoPay: true }, s.owner);
+  r = await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", autoPay: true }, s.owner);
   assert.equal(r.body.autoPay, true); assert.equal(r.body.autoPayOnBy, "jared@example.com"); assert.ok(r.body.autoPayOnAt);
   r = await s.call("POST", "/api/admin/partner-share/run", { job: "payout" }, s.owner);
   assert.equal(r.body.paid.cents, mem.cents + vid.cents);
@@ -142,7 +156,7 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   const csv = await s.call("GET", "/api/admin/partner/statement.csv?month=2026-11", undefined, mgr.token);
   assert.match(csv.text, /^date,product,category,gross_usd/); assert.ok(!csv.text.includes("sam@example.com"));
   // Continuing share (Section 9.2): after active service ends, new payments earn 5%
-  await s.call("PUT", "/api/admin/partner-share/settings", { status: "continuing" }, s.owner);
+  await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", status: "continuing" }, s.owner);
   await s.hook(s.invoice());
   assert.equal(s.readJson("partner-share-ledger").slice(-1)[0].pct, 5);
 });
@@ -151,7 +165,7 @@ test("PATF partners: the manager registers a partner (Section 7.2), its code cre
   const s = await start(t);
   const mgr = await s.staffLogin({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
   const dev = await s.staffLogin({ name: "Dev Person", email: "dev@example.com", role: "developer" });
-  await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, s.owner);
+  await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", enabled: true, managerStaffId: mgr.id }, s.owner);
   // Registration: capped at 15%; the developer has no access
   assert.equal((await s.call("POST", "/api/admin/partner/partners", { name: "Iron Gym", type: "gym", ratePct: 20 }, mgr.token)).status, 400);
   assert.equal((await s.call("POST", "/api/admin/partner/partners", { name: "Iron Gym", type: "gym", ratePct: 10 }, dev.token)).status, 403);
@@ -169,7 +183,7 @@ test("PATF partners: the manager registers a partner (Section 7.2), its code cre
   assert.equal((await s.call("POST", "/api/me/referral/claim", { code: "ANYCODE1" }, r.body.token)).status, 409, "a partner's customer can't add a second code");
   gm.stripeCustomerId = "cus_gm"; gm.membership = { tier: "member", until: "2026-12-20", stripeSubscriptionId: "sub_gm", status: "active" }; s.writeJson("clients", list);
   // The owner moves the manager to the continuing share: ordinary online revenue earns 5%, the originated partner's customers 15% (Section 4.4)
-  await s.call("PUT", "/api/admin/partner-share/settings", { status: "continuing" }, s.owner);
+  await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", status: "continuing" }, s.owner);
   await s.hook(s.invoice()); // Sam, no partner
   const gmInv = s.invoice({ customer: "cus_gm" }); await s.hook(gmInv);
   const led = s.readJson("partner-share-ledger");

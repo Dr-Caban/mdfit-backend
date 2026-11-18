@@ -1560,6 +1560,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/custom-workouts").mountCustomWorkouts({ store, activity, ...cl }); // workout builder + member challenges
   require("./lib/shares").mountShares({ app, store, limiter, me: cl.me, clients: cl.clients, save: cl.save }); // share a saved program or workout by link
   mountAnalytics({ app, admin, store, limiter });
+  require("./lib/dev-console").mountDevConsole({ admin, store, clients: cl.clients, cfg }); // /dev: activity, usage and spending as totals, no patient data
   mountActivityLog({ admin, log: activityLog });
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
   admin.get("/email-log", (req, res) => {
@@ -1584,7 +1585,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // refunds and Express account changes through app.get("affiliates")
   require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl });
   // The revenue ledger and the manager's revenue share (Agreement Section 4); /api/admin/partner* screens
-  require("./lib/partner-share").mountPartnerShare({ app, admin, store, cfg, logger, audit, notify, clients: cl.clients, staff });
+  require("./lib/partner-share").mountPartnerShare({ app, admin, store, cfg, logger, audit, notify, clients: cl.clients, staff, limiter, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits
   // A patient scheduling and paying for their own video visit (Medical record). The slot is held while Stripe takes the
   // payment, so two patients can never land on the same time, and a checkout nobody finishes lets the hold lapse.

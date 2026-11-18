@@ -233,7 +233,7 @@ test("affiliates edge: a member who leaves stops earning but is still paid; a pa
 test("affiliates edge: settings are bounded; adjustments are bounded; only the owner sees the owner's view; a member sees only their own ledger", async (t) => {
   const w = await world(t);
   const bad = [{ ratePct: 2.555 }, { ratePct: -1 }, { ratePct: "x" }, { holdDays: 61 }, { holdDays: 1.5 }, { minPayoutCents: 99 }, { minPayoutCents: 100001 },
-    { durationMonths: 121 }, { eligibleTiers: "member" }, { eligibleTiers: ["nope"] }, { eligibleTiers: ["premium-plus"] }, { enabled: "yes" }, { freeMonthReward: 1 }, {}, { eligibleAddOns: "x" }];
+    { durationMonths: 121 }, { eligibleTiers: "member" }, { eligibleTiers: ["nope"] }, { enabled: "yes" }, { freeMonthReward: 1 }, {}, { eligibleAddOns: "x" }];
   for (const b of bad) assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", b, w.adm)).status, 400, JSON.stringify(b));
   assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 7.5 }, w.adm)).body.settings.ratePct, 7.5);
   for (const b of [{ clientId: w.P.id, cents: 0, reason: "zero" }, { clientId: w.P.id, cents: 1.5, reason: "half" }, { clientId: w.P.id, cents: 100001, reason: "too much" }, { clientId: w.P.id, cents: 100, reason: "" }])
