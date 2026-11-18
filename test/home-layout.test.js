@@ -9,7 +9,7 @@ test("home layout: defaults, saved order, later cards and validation", () => {
   const d = homeOf({});
   assert.equal(d.sections.length, HOME_SECTIONS.length);
   assert.equal(d.suggestions, 3);
-  assert.deepEqual(d.sections.slice(0, 4).map((x) => x.id), ["gem", "care", "fromJared", "today"], "the gem card leads, then what Dr. Jared left");
+  assert.deepEqual(d.sections.slice(0, 5).map((x) => x.id), ["gem", "care", "fromJared", "journey", "today"], "the gem card leads, then what Dr. Jared left, then the cave");
   assert.ok(d.sections.every((x) => x.state !== "hidden" && x.show), "nothing hidden until the owner hides it");
   assert.equal(d.sections.find((x) => x.id === "events").state, "folded");
   // A full saved order is kept exactly, unknown ids dropped
