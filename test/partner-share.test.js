@@ -58,13 +58,16 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   const s = await start(t);
   const mgr = await s.staffLogin({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
   const dev = await s.staffLogin({ name: "Dev Person", email: "dev@example.com", role: "developer" });
-  // The console is one person's (MANAGER_EMAIL): not the developer, not another Manager account, not even the owner
+  // The console is one person's (MANAGER_EMAIL): not the developer, not another Manager account. The owner may look.
   const r0 = await s.call("GET", "/api/admin/partner/share", undefined, mgr.token);
   assert.equal(r0.status, 200); assert.equal(r0.body.enabled, false, "the manager sees it isn't switched on yet");
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, dev.token)).status, 403);
   const other = await s.staffLogin({ name: "Other Manager", email: "other@example.com", role: "manager" });
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, other.token)).status, 403);
-  assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, s.owner)).status, 403);
+  { const seen = await s.call("GET", "/api/admin/partner/share", undefined, s.owner);
+    assert.equal(seen.status, 200, "the owner can look at the manager console"); assert.equal(seen.body.viewOnly, true);
+    for (const u of ["/api/admin/partner/statement", "/api/admin/partner/statement.csv", "/api/admin/partner/stripe/status", "/api/admin/partner/patf"]) assert.equal((await s.call("GET", u, undefined, s.owner)).status, 200, u);
+    assert.equal((await s.call("POST", "/api/admin/partner/partners", { name: "Not Mine", type: "gym", ratePct: 10 }, s.owner)).status, 403, "the owner cannot add a partner as the manager"); }
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", managerStaffId: other.id }, s.owner)).status, 400, "the share can only go to the MANAGER_EMAIL account");
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { enabled: true, managerStaffId: mgr.id }, mgr.token)).status, 403, "the manager can't set their own share");
   assert.equal((await s.call("PUT", "/api/admin/partner-share/settings", { password: "owner-pass-123", managerStaffId: dev.id }, s.owner)).status, 400, "only a Manager account can hold the share");
@@ -200,6 +203,6 @@ test("PATF partners: the manager registers a partner (Section 7.2), its code cre
   assert.equal((await s.call("PUT", `/api/admin/partner-share/partners/${p.id}`, { dispute: "We already work with them" }, s.owner)).status, 400);
   assert.equal((await s.call("PUT", `/api/admin/partner-share/partners/${p.id}`, { ratePct: 12 }, mgr.token)).status, 403, "the manager can't change a partner's terms after registering");
   // The affiliate programme is held to the same 15% allowance
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 16 }, s.owner)).status, 400);
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 15 }, s.owner)).status, 200);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "owner-pass-123", ratePct: 16 }, s.owner)).status, 400);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "owner-pass-123", ratePct: 15 }, s.owner)).status, 200);
 });

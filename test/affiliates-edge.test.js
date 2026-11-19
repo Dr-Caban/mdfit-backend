@@ -61,7 +61,7 @@ async function world(t, settings = {}, extra = {}) {
   const s = await start({ stripeClient: f.fake, stripeSecretKey: "rk_test_made_up", stripeWebhookSecret: WHSEC, stripeConnectWebhookSecret: CONNECT_WHSEC, now: () => clock, ...extra });
   t.after(s.close);
   const adm = await s.adminToken();
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true, ratePct: 5, holdDays: 7, minPayoutCents: 100, ...settings }, adm)).status, 200);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", enabled: true, ratePct: 5, holdDays: 7, minPayoutCents: 100, ...settings }, adm)).status, 200);
   const pat = (await signup(s)).body.token;
   const code = (await s.call("GET", "/api/me/referral", undefined, pat)).body.code;
   assert.equal((await s.call("POST", "/api/me/affiliate/join", { agree: true }, pat)).status, 200);
@@ -124,7 +124,7 @@ test("affiliates edge: the earning window ends after durationMonths; a hold of 0
   const w = await world(t, { durationMonths: 2, holdDays: 0 });
   await w.s.hook(w.invoice());
   assert.equal(w.ledger()[0].status, "ready");
-  await w.s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 10 }, w.adm);
+  await w.s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", ratePct: 10 }, w.adm);
   w.setClock("2027-01-02T10:00:00Z"); await w.s.hook(w.invoice());
   w.setClock("2027-02-02T10:00:00Z"); await w.s.hook(w.invoice());
   assert.deepEqual(w.ledger().map((r) => [r.ratePct, r.cents]), [[5, 100], [10, 200]], "earns through month two, not after");
@@ -234,8 +234,8 @@ test("affiliates edge: settings are bounded; adjustments are bounded; only the o
   const w = await world(t);
   const bad = [{ ratePct: 2.555 }, { ratePct: -1 }, { ratePct: "x" }, { holdDays: 61 }, { holdDays: 1.5 }, { minPayoutCents: 99 }, { minPayoutCents: 100001 },
     { durationMonths: 121 }, { eligibleTiers: "member" }, { eligibleTiers: ["nope"] }, { enabled: "yes" }, { freeMonthReward: 1 }, {}, { eligibleAddOns: "x" }];
-  for (const b of bad) assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", b, w.adm)).status, 400, JSON.stringify(b));
-  assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 7.5 }, w.adm)).body.settings.ratePct, 7.5);
+  for (const b of bad) assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", ...b }, w.adm)).status, 400, JSON.stringify(b));
+  assert.equal((await w.s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", ratePct: 7.5 }, w.adm)).body.settings.ratePct, 7.5);
   for (const b of [{ clientId: w.P.id, cents: 0, reason: "zero" }, { clientId: w.P.id, cents: 1.5, reason: "half" }, { clientId: w.P.id, cents: 100001, reason: "too much" }, { clientId: w.P.id, cents: 100, reason: "" }])
     assert.equal((await w.s.call("POST", "/api/admin/affiliates/adjust", b, w.adm)).status, 400, JSON.stringify(b));
   assert.equal((await w.s.call("POST", "/api/admin/affiliates/adjust", { clientId: w.S.id, cents: 100, reason: "not an affiliate" }, w.adm)).status, 404);
@@ -288,7 +288,7 @@ test("affiliates edge: no publishable key, no embedded session (the app falls ba
 test("affiliates edge: with Stripe not configured nothing breaks; the member is told payouts aren't ready", async (t) => {
   const s = await start({ stripeSecretKey: "", stripeClient: null }); t.after(s.close);
   const adm = await s.adminToken();
-  await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true }, adm);
+  await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", enabled: true }, adm);
   const pat = (await signup(s)).body.token;
   assert.equal((await s.call("POST", "/api/me/affiliate/join", { agree: true }, pat)).status, 200);
   const me = (await s.call("GET", "/api/me/affiliate", undefined, pat)).body;

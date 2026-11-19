@@ -1583,7 +1583,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   const pay = mountPayments({ app, admin, store, notify, activity, cfg, settings, logger, ...cl });
   // Affiliate commissions on subscriptions (lib/affiliates.js): the webhook in lib/payments.js hands it paid invoices,
   // refunds and Express account changes through app.get("affiliates")
-  require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl });
+  require("./lib/affiliates").mountAffiliates({ app, admin, store, cfg, logger, activity, audit, notify, limiter, ...cl, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   // The revenue ledger and the manager's revenue share (Agreement Section 4); /api/admin/partner* screens
   require("./lib/partner-share").mountPartnerShare({ app, admin, store, cfg, logger, audit, notify, clients: cl.clients, staff, limiter, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   // Medical record: active patients, members waiting to be converted, chart notes and prescribed movements, paid video visits

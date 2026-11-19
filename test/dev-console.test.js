@@ -43,6 +43,8 @@ test("the developer console: totals for the owner and a developer, closed to eve
   for (const secret of ["Privateperson", "pat.private", "@example.com", "941-555"]) assert.equal(raw.includes(secret), false, `"${secret}" must not appear`);
 
   assert.equal((await s.call("GET", "/api/admin/dev/overview", undefined, owner)).status, 200, "the owner can see it");
+  const mgr = await mk("Manager Person", "mgr@example.com", "manager");
+  assert.equal((await s.call("GET", "/api/admin/dev/overview", undefined, mgr)).status, 200, "the manager can see it too");
   const no = await s.call("GET", "/api/admin/dev/overview", undefined, desk);
   assert.equal(no.status, 403); assert.equal(no.body.need, "developer");
   assert.equal((await s.call("GET", "/api/admin/dev/overview")).status, 401);
