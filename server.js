@@ -144,6 +144,9 @@ function zonedToUtc(date, time, tz = "America/New_York") {
   let t = guess - off(guess); t = guess - off(t);
   return new Date(t);
 }
+// A real calendar date ("2026-11-31" is not one) and a real time of day ("25:99" is not one)
+const realDate = (d) => { const t = typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? Date.parse(d + "T12:00:00Z") : NaN; return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === d; };
+const realTime = (t) => typeof t === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 const addDays = (date, n) => new Date(Date.parse(date + "T12:00:00Z") + n * 864e5).toISOString().slice(0, 10);
 const weekday = (date) => new Date(date + "T12:00:00Z").getUTCDay();
 const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
@@ -177,7 +180,8 @@ function createApp(cfg = loadConfig()) {
   const activityLog = createActivityLog({ dir: path.join(cfg.dataDir, "logs"), key: cfg.dataKey || cfg.sessionSecret,
     keepDays: Math.max(7, Math.min(365, Number(process.env.LOG_KEEP_DAYS) || 90)), now: cfg.now || (() => new Date()) });
   // Once-a-minute heartbeats are not activity and would be most of the file; errors on them are still kept.
-  const HEARTBEAT = /"msg":"request".*"path":"\/api\/me\/(presence|messages\/unread-count)","status":[23]/;
+  // (the request log writes the path as the member router saw it, without "/api/me", so both spellings are matched)
+  const HEARTBEAT = /"msg":"request".*"path":"(?:\/api\/me)?\/(presence|messages\/unread-count)","status":[23]/;
   logger.tee = (line) => { if (!HEARTBEAT.test(line)) activityLog.append(line); };
   // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
   const EMAIL_LOG_DAYS = 60, EMAIL_LOG_FAILS = 50;
@@ -334,7 +338,8 @@ function createApp(cfg = loadConfig()) {
     const list = store.read("activity", []);
     list.unshift({ time: new Date().toISOString(), ...detail, type }); // the event type wins over any detail field named "type"
     store.write("activity", list.slice(0, ACTIVITY_MAX));
-    logger.info("activity", { type, ...detail, email: detail.email ? mask(detail.email) : undefined });
+    // the log line never carries a person's name (the feed above and the owner's push do; the log leaves the server)
+    logger.info("activity", { type, ...detail, name: undefined, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
     if (rt) rt.emitActivity(type, detail);
     push.ownerActivity(type, detail); // Dr. Jared's phone (MD Fit app, signed in to Admin)
@@ -542,6 +547,12 @@ function createApp(cfg = loadConfig()) {
   anchorTimer.unref();
 
   // ---- Headers, CORS, request log
+  // Two routes carry something private in their path, a subscriber's email and a device's push token. The request log
+  // keeps paths, so both are blanked before its line is written (this listener is added first, so it runs first).
+  app.use((req, res, next) => {
+    res.on("finish", () => { req.url = req.url.replace(/^((?:\/api\/(?:admin|me))?\/(?:subscribers|devices)\/)[^/?]+/, "$1[hidden]"); });
+    next();
+  });
   app.use(requestLogger);
   app.use((req, res, next) => {
     res.set("X-Content-Type-Options", "nosniff");
@@ -604,6 +615,9 @@ function createApp(cfg = loadConfig()) {
       if (payload.role !== "staff") return again();
       const rec = staff.byEmail(email);
       if (!rec || rec.active !== true) return again();
+      // A password change or reset signs out every session opened under the old password. A token from before
+      // sessions carried this number has none, which reads as 0: it works until that account's password next changes.
+      if ((payload.pwv || 0) !== (rec.pwv || 0)) return again();
       req.account = { isOwner: false, id: rec.id, email: rec.email, name: rec.name, role: rec.role, roles: Array.isArray(rec.roles) && rec.roles.length ? [...rec.roles] : [rec.role], permissions: [...(rec.permissions || [])], mustChangePassword: !!rec.mustChangePassword };
     }
     req.admin = req.account.email; // kept for the audit middleware and every existing handler
@@ -722,7 +736,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const s = settings();
     const type = s.appointmentTypes.find((t) => t.id === req.query.type) || (req.query.type === PLAN_REVIEW.id ? PLAN_REVIEW : s.appointmentTypes[0]);
     const { date: today } = nowParts(cfg.tz, cfg.now());
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") && req.query.from > today ? req.query.from : today;
+    const from = realDate(req.query.from) && req.query.from > today ? req.query.from : today;
     const days = Math.min(31, Math.max(1, Number.parseInt(req.query.days, 10) || 14));
     const busy = await calsync.busy(from, addDays(from, days - 1), { icsUrl: spUrl() });
     const out = [];
@@ -962,7 +976,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const exp = Date.now() + SESSION_HOURS * 3600e3;
     if (!isOwner) { staff.noteLogin(person.id); req.loginActor = `admin:${email}`; }
     activity("login", { email, via, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
-    const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", exp };
+    const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", pwv: person.pwv || 0, exp };
     res.json({ token: signToken(payload, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
   }
   // Sign in with Google for the owner and staff (the workspace at /admin and the manager's console at /manager).
@@ -1012,9 +1026,14 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const out = staff.changeOwnPassword(req.account, b.current, b.password, req.ip);
     if (out.notFound) return res.status(401).json({ error: "Please log in again." });
     if (out.wrong) return res.status(403).json({ error: "Your current password is wrong." });
-    res.json({ ok: true });
+    // The change signs out every session under the old password, this one included: it carries on with a new token
+    const exp = Date.now() + SESSION_HOURS * 3600e3;
+    res.json({ ok: true, token: signToken({ sub: req.account.email, role: "staff", pwv: out.pwv, exp }, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
   });
-  admin.get("/online", (req, res) => { const rt = app.get("rt"); res.json(rt ? rt.onlineStats() : { members: [], memberCount: 0, visitorCount: 0 }); });
+  // An account that may never see patient data (a Manager or Developer, lib/staff.js) gets the counts on the screens
+  // below and nothing that names a person: no names online, no appointments, no feed details, no owner pushes.
+  const countsOnly = (req) => staff.noPatientData(req.account);
+  admin.get("/online", (req, res) => { const rt = app.get("rt"), o = rt ? rt.onlineStats() : { members: [], memberCount: 0, visitorCount: 0 }; res.json(countsOnly(req) ? { ...o, members: [] } : o); });
   admin.get("/mfa", (req, res) => res.json({ enabled: mfaOn(), method: "email", emailReady: notify.enabled, forcedOff: !!cfg.mfaForceOff, sendsTo: mask(cfg.adminEmail) }));
   admin.post("/mfa/start", async (req, res) => {
     if (!notify.enabled) return res.status(503).json({ error: "Email isn't connected yet (RESEND_API_KEY and NOTIFY_FROM)." });
@@ -1049,8 +1068,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       subscribers: subscribers().length,
       bookingsThisWeek: up.reduce((n, s) => n + (s.capacity - s.spotsLeft), 0),
       sessionsThisWeek: up.length,
-      today: live.filter((a) => a.date === today).map(({ cancelToken, ...a }) => a),
-      nextAppointments: live.slice(0, 8).map(({ cancelToken, ...a }) => a),
+      today: countsOnly(req) ? [] : live.filter((a) => a.date === today).map(({ cancelToken, ...a }) => a),
+      nextAppointments: countsOnly(req) ? [] : live.slice(0, 8).map(({ cancelToken, ...a }) => a),
       upcoming: up.slice(0, 10)
     });
   });
@@ -1058,7 +1077,10 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   admin.get("/settings", (req, res) => res.json(settings()));
   admin.put("/settings", (req, res) => {
     const s = mergeSettings(settings(), req.body);
-    store.write("settings", s);
+    // Saved settings are always current: an older save was brought up to date when the server started, and a store
+    // with none starts from today's defaults. They are marked so, or a first save on a new store would be taken for
+    // an old one at the next start and the one-time updates above would put the defaults back over it.
+    store.write("settings", { ...s, version: 3, telehealthPrices2026: true, telehealthHourly150: true, followup80: true });
     activity("settings", { sections: Object.keys(req.body) });
     res.json(s);
   });
@@ -1171,7 +1193,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const c = clientById(req.params.id);
     if (!c) return res.status(404).json({ error: "Client not found." });
     const b = req.body || {}, s = settings();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || "") || !/^\d{2}:\d{2}$/.test(b.time || "")) return res.status(400).json({ error: "Pick a date and time." });
+    if (!realDate(b.date) || !realTime(b.time)) return res.status(400).json({ error: "Pick a date and time." });
     const minutes = Number(b.minutes || 30);
     if (![15, 30, 45, 60, 90].includes(minutes)) return res.status(400).json({ error: "Length is 15, 30, 45, 60 or 90 minutes." });
     let link;
@@ -1187,8 +1209,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     const busy = await calsync.busy(b.date, b.date, { icsUrl: spUrl() });
     const block = busyOn(b.date, busy).find(([s0, e0]) => s0 < end && e0 > start);
     if (block && !b.force) return res.status(409).json({ error: "That overlaps something on your calendar (Google Calendar or SimplePractice). Pick another time." });
-    const clash = appointments().find((a) => a.date === b.date && a.status === "booked" && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
-    if (clash && !b.force) return res.status(409).json({ error: `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
+    // A time a patient is paying for right now counts as taken too (their hold), until it lapses
+    const clash = appointments().find((a) => a.date === b.date && (a.status === "booked" || (a.status === "hold" && holdLive(a))) && toMin(a.time) < end && toMin(a.time) + (a.minutes || 60) > start);
+    if (clash && !b.force) return res.status(409).json({ error: clash.status === "hold" ? `A patient is paying for ${clash.typeName} at ${prettyTime(clash.time)} right now, so that time is held. Pick another time.` : `That overlaps ${clash.typeName} at ${prettyTime(clash.time)}. Pick another time.` });
     const typeName = String(b.title || "Video consultation").trim().slice(0, 80) || "Video consultation";
     const appt = { id: id(), typeId: "consult-video", typeName, minutes, date: b.date, time: b.time, name: c.name, email: c.email, phone: c.phone || "",
       notes: "", areas: [], painLevel: null, status: "booked", adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
@@ -1246,7 +1269,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // anything whose title can't be read (SimplePractice, a calendar that wouldn't answer) stays a plain "busy" block.
   // MD Fit's own visits, which are copied to Google, are left out so they don't show twice.
   admin.get("/busy", async (req, res) => {
-    const from = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from || "")) ? String(req.query.from) : nowParts(cfg.tz, cfg.now()).date;
+    const from = realDate(req.query.from) ? req.query.from : nowParts(cfg.tz, cfg.now()).date;
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 42);
     let busy = [], events = null;
     // the two calendar reads go out together, not one after the other
@@ -1446,7 +1469,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     res.type("text/csv").attachment("mdfit-subscribers.csv").send(toCsv(subscribers(), ["email", "createdAt"]));
   });
 
-  admin.get("/activity", (req, res) => res.json(store.read("activity", []).slice(0, 200)));
+  admin.get("/activity", (req, res) => { const list = store.read("activity", []).slice(0, 200); res.json(countsOnly(req) ? list.map((e) => ({ time: e.time, type: e.type })) : list); });
 
   const cl = mountClients({ app, admin, store, cfg, notify, cal, nowParts, activity, limiter, logger, mask, prettyDate, prettyTime, settings, onCancel: (a) => unsyncBooking(a) });
   app.set("findClient", (id) => cl.clients().find((c) => c.id === id) || null); // for realtime sign-in checks
@@ -1521,6 +1544,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   });
   cl.me.delete("/devices/:token", (req, res) => { push.unregister(req.params.token); res.json({ ok: true }); });
   admin.post("/devices", (req, res) => {
+    // An owner device is sent what happens in the practice, members' names included
+    if (countsOnly(req)) return res.status(403).json({ error: "Practice notifications name patients, so this account can't receive them.", need: "owner" });
     const { token, platform } = deviceBody(req);
     if (!push.register({ token, admin: true, platform })) return res.status(400).json({ error: "Bad device token." });
     res.json({ ok: true, enabled: push.enabled });
@@ -1565,7 +1590,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   // Email delivery for Admin → Analytics (who gets owner alerts, sent/failed per day, latest failures)
   admin.get("/email-log", (req, res) => {
     const d = store.read("email-log", { days: {}, failures: [] });
-    res.json({ enabled: notify.enabled, alertsTo: notify.owners.map(mask), days: Object.entries(d.days).map(([date, v]) => ({ date, ...v })).slice(0, 30), failures: d.failures.slice(0, 20) });
+    res.json({ enabled: notify.enabled, alertsTo: notify.owners.map(mask), days: Object.entries(d.days).map(([date, v]) => ({ date, ...v })).slice(0, 30), failures: countsOnly(req) ? [] : d.failures.slice(0, 20) }); // a failure's subject line can name a patient
   });
   // A server that keeps being restarted (run out of memory, most likely) must not start its heaviest background job
   // again the moment it is back: three starts inside fifteen minutes and the video sync waits for its next turn
@@ -1593,7 +1618,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     // Dr. Jared's open start times, his calendar included
     openings: async (type, from, days) => {
       const s = settings(), { date: t0 } = nowParts(cfg.tz, cfg.now());
-      const start = /^\d{4}-\d{2}-\d{2}$/.test(from) && from > t0 ? from : t0;
+      const start = realDate(from) && from > t0 ? from : t0;
       const n = Math.min(31, Math.max(1, days));
       const busy = await calsync.busy(start, addDays(start, n - 1), { icsUrl: spUrl() });
       const out = [];
@@ -1608,7 +1633,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
       const appt = { id: id(), typeId: type.id, typeName: type.name, minutes, date, time, name: client.name, email: client.email, phone: client.phone || "",
         notes: "", areas: [], painLevel: null, status, adminNotes: "", cancelToken: newToken(), createdAt: new Date().toISOString(),
         source: "patient", clientId: client.id, meetingLink: link, payment, paidService: payment === "paid" ? service : undefined,
-        ...(status === "hold" ? { holdUntil: new Date(Date.now() + 20 * 60 * 1000).toISOString() } : {}) };
+        // held for longer than the checkout it waits on can stay open (30 minutes, lib/payments.js), with room for Stripe's notice to arrive
+        ...(status === "hold" ? { holdUntil: new Date(Date.now() + 40 * 60 * 1000).toISOString() } : {}) };
       const list = appointments(); list.push(appt); store.write("appointments", list);
       if (status === "booked") afterPatientBooking(appt, client);
       const { cancelToken, ...out } = appt;
@@ -1618,6 +1644,23 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     confirm: (apptId, client) => {
       const list = appointments(), a = list.find((x) => x.id === apptId);
       if (!a || a.status === "cancelled") return null;
+      // The payment can still arrive after the hold has run out (a late notice from Stripe), and by then the time may
+      // be someone else's. It is never booked over: this visit is set aside with a note, the payment stays on the
+      // patient's record as a paid visit waiting for a time (lib/emr.js keeps it open when nothing is booked here),
+      // nothing is refunded, and the owner is told so they can reschedule.
+      if (a.status === "hold") {
+        const start = toMin(a.time), end = start + (a.minutes || 60);
+        const taken = list.find((x) => x.id !== a.id && x.date === a.date && liveAppt(x) && toMin(x.time) < end && toMin(x.time) + (x.minutes || 60) > start);
+        if (taken) {
+          const when = `${prettyDate(a.date)} at ${prettyTime(a.time)}`;
+          a.status = "cancelled"; a.payment = "paid"; a.slotLost = true; delete a.holdUntil; a.updatedAt = new Date().toISOString();
+          a.adminNotes = "Paid online, but this time was taken before the payment arrived. Nothing was refunded: the payment is on their record as a paid visit waiting for a time.";
+          store.write("appointments", list);
+          activity("visit_paid_time_taken", { email: a.email, date: a.date, when, id: a.id });
+          notify.owner(`Paid, but the time was taken: ${a.name}`, `${a.name} (${a.email}) paid for ${a.typeName} on ${when}, but the payment arrived after their hold on that time had run out, and the time now belongs to another visit.\n\nNothing was booked over it and nothing was refunded. The payment is on their record as a paid visit waiting for a time: Admin → Medical record → ${a.name} → Video visits. The visit they asked for is in Admin → Appointments (all), cancelled, with a note.`);
+          return null;
+        }
+      }
       if (a.status === "hold") { a.status = "booked"; delete a.holdUntil; }
       a.payment = "paid"; a.updatedAt = new Date().toISOString();
       store.write("appointments", list);
