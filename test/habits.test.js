@@ -144,6 +144,7 @@ test("daily XP norms: Novice 30, Amateur 50, Advanced 75, Elite 100; a day quali
   assert.equal((await s.call("PUT", "/api/me/habits/goal", { level: "elite" }, tok)).body.goal, 100);
   const hist = (await s.call("GET", "/api/me/habits/history?month=2026-11", undefined, tok)).body;
   assert.equal(hist.days.find((d) => d.date === day(2)).qualifying, true, "Nov 2 was judged at the 50 in force that day");
+  { const d2 = hist.days.find((d) => d.date === day(2)); assert.equal(typeof d2.activities, "number", "each day says how much came from daily activities alone"); assert.ok(d2.activities <= d2.points); }
   s.setDay(day(4));
   assert.equal((await today(s, tok)).body.goal, 100, "the chosen norm carries forward");
 });
