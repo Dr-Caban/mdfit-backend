@@ -166,16 +166,30 @@ test("affiliates: join, earn 5% of a referred friend's subscription, hold, Strip
 });
 
 test("affiliates: the free month for a referral can be switched off once commissions pay for referrals; the switch is off by default (unchanged behaviour)", async (t) => {
-  const s = await start(); t.after(s.close);
+  // The month is granted when the referred account confirms its email with the code sent to it (a made-up address earns nothing)
+  const http = require("node:http"), sent = [];
+  const srv = http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { sent.push(JSON.parse(b)); res.end("{}"); }); }).listen(0);
+  await new Promise((r) => srv.once("listening", r)); t.after(() => srv.close());
+  const s = await start({ resendKey: "re_test", resendUrl: `http://127.0.0.1:${srv.address().port}`, notifyFrom: "MD Fit <hello@example.com>", notifyGapMs: 0 }); t.after(s.close);
+  let codes = 0;
+  const confirm = async (token) => {
+    await s.call("POST", "/api/me/email/code", {}, token); codes++;
+    const mails = () => sent.filter((m) => /is your MD Fit code/.test(m.subject));
+    for (let i = 0; i < 100 && mails().length < codes; i++) await new Promise((r) => setTimeout(r, 20));
+    return s.call("POST", "/api/me/email/verify", { code: mails().pop().text.match(/\b(\d{6})\b/)[1] }, token);
+  };
   const adm = await s.adminToken();
   const pat = (await signup(s)).body.token;
   const code = (await s.call("GET", "/api/me/referral", undefined, pat)).body.code;
-  await signup(s, { name: "Sam Roe", email: "sam@example.com", referralCode: code });
+  const sam = (await signup(s, { name: "Sam Roe", email: "sam@example.com", referralCode: code })).body.token;
+  assert.equal((await confirm(sam)).status, 200);
   let P = s.readJson("clients").find((c) => c.email === "pat@example.com");
   assert.equal(P.membership && P.membership.tier, "member", "the free month, as before");
+  const until = P.membership.until;
   assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", freeMonthReward: false }, adm)).status, 200);
-  await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: code });
+  const lee = (await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: code })).body.token;
+  assert.equal((await confirm(lee)).status, 200);
   P = s.readJson("clients").find((c) => c.email === "pat@example.com");
   assert.equal(P.referrals, 2, "the referral is still counted");
-  assert.equal(P.membership.until, s.readJson("clients").find((c) => c.email === "pat@example.com").membership.until);
+  assert.equal(P.membership.until, until, "and no month is added while the reward is off");
 });

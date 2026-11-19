@@ -356,7 +356,8 @@ test("health-app batch vitals and app config", async (t) => {
   assert.equal(r.status, 201); assert.equal(r.body.saved, 2);
   await s.call("POST", "/api/me/vitals", { date: "2026-10-30", weight: 180 }, tok);
   const v = (await s.call("GET", "/api/me/vitals", undefined, tok)).body;
-  assert.deepEqual(v.find((x) => x.date === "2026-10-30"), { date: "2026-10-30", restingHr: 57, hrv: 64, weight: 180, source: "Apple Health" });
+  // late: a day first filled in more than a day afterwards (an import of past readings) is saved and earns no XP
+  assert.deepEqual(v.find((x) => x.date === "2026-10-30"), { date: "2026-10-30", restingHr: 57, hrv: 64, weight: 180, source: "Apple Health", late: true });
   const cfgr = (await s.call("GET", "/api/app/config")).body;
   assert.equal(cfgr.apiVersion, 1); assert.equal(cfgr.features.healthSync, true);
 });
@@ -1030,7 +1031,11 @@ test("referral sign-ups: ledger entry, and the admin report counts them from the
 });
 
 test("referral tracking: Copy and Share presses, link visits, codes typed after signing up, unmatched codes, and the referrer keeps their own plan", async (t) => {
-  const s = await start(); t.after(s.close);
+  const mail = await fakeResend(t);
+  const s = await start({ ...mail.cfg, notifyGapMs: 0 }); t.after(s.close);
+  // The referrer's month is granted when the referred account's email is confirmed with the code sent to it
+  let codes = 0;
+  const confirm = async (token) => { await s.call("POST", "/api/me/email/code", {}, token); const m = (await mail.waitFor(/is your MD Fit code/, ++codes)).pop(); return s.call("POST", "/api/me/email/verify", { code: m.text.match(/\b(\d{6})\b/)[1] }, token); };
   const pat = (await signup(s)).body.token;
   let me = (await s.call("GET", "/api/me/referral", undefined, pat)).body;
   const code = me.code;
@@ -1059,7 +1064,9 @@ test("referral tracking: Copy and Share presses, link visits, codes typed after 
   // Lee types a code that belongs to nobody at sign-up
   await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: "MDFIT-NOPE01" });
   // Kim signs up with the code: counted as an email sign-up
-  await signup(s, { name: "Kim Ito", email: "kim@example.com", referralCode: code });
+  const kim = (await signup(s, { name: "Kim Ito", email: "kim@example.com", referralCode: code })).body.token;
+  assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).find((c) => c.email === "pat@example.com").membership.until, "2099-01-01", "no month for an address nobody has proven yet");
+  assert.equal((await confirm(sam)).status, 200); assert.equal((await confirm(kim)).status, 200);
 
   list = JSON.parse(fs.readFileSync(f, "utf8"));
   const p = list.find((c) => c.email === "pat@example.com");
