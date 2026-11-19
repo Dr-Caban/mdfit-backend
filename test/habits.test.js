@@ -202,7 +202,7 @@ test("month history lists qualifying days, future days and today's partial", asy
 test("MD Fit pain tracks and Pain Tool protocols earn the program 50 XP", async (t) => {
   const s = await start(); t.after(s.close);
   const { token: tok } = await signup(s);
-  await workout(s, tok, { title: "Neck pain track", key: "track-neck-relief" });
+  await workout(s, tok, { title: "Neck pain track", key: "track-scalenes" });
   assert.equal((await today(s, tok)).body.workoutXp, 50);
   s.setDay(day(3));
   await workout(s, tok, { title: "Scalenes protocol", key: "painproto-scalenes" });

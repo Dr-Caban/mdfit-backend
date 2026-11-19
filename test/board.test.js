@@ -61,7 +61,7 @@ test("enter: wrong code 401, right code gives a 30-day board token", async (t) =
   assert.equal(ok.status, 200);
   assert.deepEqual(Object.keys(ok.body).sort(), ["expiresAt", "token"]);
   const payload = JSON.parse(Buffer.from(ok.body.token.split(".")[0], "base64url").toString());
-  assert.deepEqual(Object.keys(payload).sort(), ["exp", "role"]);
+  assert.deepEqual(Object.keys(payload).sort(), ["exp", "pc", "role"]); // pc: which passcode opened it, as a keyed fingerprint (never the passcode)
   assert.equal(payload.role, "board");
   const days = (payload.exp - Date.now()) / 864e5;
   assert.ok(days > 29.9 && days <= 30);

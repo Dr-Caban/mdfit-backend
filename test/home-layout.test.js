@@ -2,7 +2,7 @@
 // The member app's Home layout (owner-edited in the workspace) and Solomon's tips without reworded repeats.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { homeOf, homeIn, layoutOf, layoutIn, memberLayoutIn, HOME_SECTIONS } = require("../lib/content");
+const { homeOf, homeIn, layoutOf, layoutIn, memberLayoutIn, memberLayoutOf, HOME_SECTIONS } = require("../lib/content");
 const { addSuggested, suggestedOf } = require("../lib/suggested");
 
 test("home layout: defaults, saved order, later cards and validation", () => {
@@ -54,11 +54,13 @@ test("profile layout and a member's own arrangement inside the owner's", () => {
   assert.deepEqual(layoutIn("profile", { sections: [{ id: "referral", state: "open" }], suggestions: 9 }), { sections: [{ id: "referral", state: "open" }] });
   assert.throws(() => layoutIn("profile", { sections: [{ id: "plans" }] }), /Profile layout: unknown/);
   const owner = layoutOf("home", { home: { sections: [{ id: "gem", state: "hidden" }] } });
-  const mine = memberLayoutIn("home", { sections: [{ id: "gem", state: "open" }, { id: "care", state: "hidden" }, { id: "events", state: "open" }] }, owner);
-  assert.deepEqual(mine.sections, [{ id: "gem", state: "hidden" }, { id: "care", state: "folded" }, { id: "events", state: "open" }]);
-  // Read back through today's card list: the rest of the cards follow in the owner's default order
-  const read = layoutOf("home", { home: mine });
+  // What is saved is the member's own choice ("care" at most folded); the owner's hide is applied when it is read,
+  // not written into their record, so a card the owner shows again comes back for them
+  const mine = memberLayoutIn("home", { sections: [{ id: "gem", state: "open" }, { id: "care", state: "hidden" }, { id: "events", state: "open" }] });
+  assert.deepEqual(mine.sections, [{ id: "gem", state: "open" }, { id: "care", state: "folded" }, { id: "events", state: "open" }]);
+  // Read back through today's card list, inside the owner's: the rest of the cards follow in the owner's default order
+  const read = memberLayoutOf("home", mine, owner);
   const ids = read.sections.map((x) => x.id);
-  assert.equal(ids[0], "gem"); assert.ok(ids.indexOf("care") < ids.indexOf("events"), "the member's own order is kept");
+  assert.equal(ids[0], "gem"); assert.equal(read.sections[0].state, "hidden", "the owner hid it"); assert.ok(ids.indexOf("care") < ids.indexOf("events"), "the member's own order is kept");
   assert.equal(read.sections.length, HOME_SECTIONS.length);
 });
