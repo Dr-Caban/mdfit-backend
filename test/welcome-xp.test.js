@@ -151,4 +151,10 @@ test("let me get to know you: history and goal on the account, choices only, and
   for (const bad of [{ program: "knee-6", start: "next monday" }, { program: "knee-6", start: "2027-06-01" }, { program: "Bad Id", start: "2026-11-03" }]) assert.equal((await call("PUT", "/api/me/about/plan", bad)).status, 400, JSON.stringify(bad));
   assert.deepEqual((await call("PUT", "/api/me/about/plan", { program: "knee-6", start: "2026-11-09" })).body.plan, { program: "knee-6", start: "2026-11-09" });
   assert.deepEqual((await call("GET", "/api/me/about")).body.plan, { program: "knee-6", start: "2026-11-09" });
+  // skipping today's session: today only, on the account, and it can be taken back
+  assert.deepEqual((await call("GET", "/api/me/about")).body.skips, []);
+  assert.equal((await call("PUT", "/api/me/about/skip/2026-11-01")).status, 400, "not yesterday's");
+  assert.deepEqual((await call("PUT", "/api/me/about/skip/2026-11-02")).body.skips, ["2026-11-02"]);
+  assert.deepEqual((await call("PUT", "/api/me/about/skip/2026-11-02")).body.skips, ["2026-11-02"], "once");
+  assert.deepEqual((await call("DELETE", "/api/me/about/skip/2026-11-02")).body.skips, []);
 });
