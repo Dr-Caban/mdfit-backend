@@ -15,6 +15,8 @@ const { mountContent } = require("./lib/content");
 const { mountMessages, cipher } = require("./lib/messages");
 const { phiStore } = require("./lib/phi");
 const { mountIntake, MASSAGE_TYPES, packetStatus } = require("./lib/intake");
+const { mountHipaa } = require("./lib/hipaa");
+const { mountCompliance } = require("./lib/compliance");
 // The account with this email (documents a patient filled from their dashboard count for every visit)
 // The patient account an appointment belongs to: only set when a signed-in member booked it for themselves.
 // Never matched by email: anyone can type someone else's email into the public booking form.
@@ -560,7 +562,7 @@ function createApp(cfg = loadConfig()) {
     if (origin && (cfg.origins.includes("*") || cfg.origins.includes(origin))) {
       res.set("Access-Control-Allow-Origin", origin);
       res.set("Vary", "Origin");
-      res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-File-Name");
+      res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-File-Name, X-Idle-Seconds");
       res.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -600,27 +602,43 @@ function createApp(cfg = loadConfig()) {
   const NOT_SET_UP = "Admin login isn't set up on the server (ADMIN_EMAIL, ADMIN_PASSWORD_HASH, SESSION_SECRET).";
   // The owner has no staff record, so /me reports the reserved id "owner" (lib/staff.js never issues it).
   const OWNER_ACCOUNT = () => ({ isOwner: true, id: staff.OWNER_ID, email: cfg.adminEmail, name: "Owner", role: "owner", permissions: [...staff.PERMISSION_KEYS] });
-  // Signing out ends that sign-in on the server too, so a copy of it kept somewhere stops working at once and not
-  // 12 hours later. Only a fingerprint of the token is kept, and only until the token would have expired anyway.
-  const outPrint = (t) => crypto.createHash("sha256").update("mdfit-signed-out:" + t).digest("hex").slice(0, 32);
-  let signedOut = null;
-  const outList = () => { if (!signedOut) signedOut = new Map((store.read("signedOut", []) || []).map((x) => [x.h, x.exp])); return signedOut; };
-  function signOutToken(token, exp) {
-    const m = outList(), now = Date.now();
-    for (const [h, e] of m) if (e <= now) m.delete(h);
-    m.set(outPrint(token), Number(exp) > now ? Number(exp) : now + 12 * 3600e3);
-    store.write("signedOut", [...m].slice(-5000).map(([h, e]) => ({ h, exp: e })));
-  }
-  const isSignedOut = (token) => { const e = outList().get(outPrint(token)); return !!e && e > Date.now(); };
+  // ---- Staff sessions, kept on the server so that logoff is real (45 CFR 164.312(a)(2)(iii)). A sign-in is entered
+  // here; every request it makes moves its clock; a session with no request for STAFF_IDLE_MINUTES is ended here,
+  // whatever the browser does, and so is one that signs out. A token this server has no entry for is refused.
+  // Wall-clock time on purpose (cfg.now can be moved by tests and must not sign anyone out). Only a hash of the token
+  // is kept, and the list is saved so a redeploy does not sign out people who are working.
+  const IDLE_MIN = cfg.staffIdleMinutes !== undefined ? Number(cfg.staffIdleMinutes) : Number(process.env.STAFF_IDLE_MINUTES || 15);
+  const IDLE_MS = IDLE_MIN > 0 ? IDLE_MIN * 60 * 1000 : 0;
+  const sessKey = (token) => crypto.createHash("sha256").update("mdfit-staff-session:" + token).digest("hex").slice(0, 32);
+  const sessions = new Map(Object.entries(store.read("staff-sessions", {}) || {}));
+  let sessDirty = false;
+  const sessSave = () => { if (!sessDirty) return; sessDirty = false; const t = Date.now(); for (const [k, v] of sessions) if (t - v > Math.max(IDLE_MS, 60000) + SESSION_HOURS * 3600e3) sessions.delete(k);
+    try { store.write("staff-sessions", Object.fromEntries([...sessions].filter(([, v]) => !IDLE_MS || t - v <= IDLE_MS))); } catch (err) { logger.warn("staff_sessions_save_failed", { error: err.message }); } };
+  if (IDLE_MS && cfg.sessionTimer !== false) { const iv = setInterval(sessSave, 20000); if (iv.unref) iv.unref(); }
+  const sessionStart = (token) => { sessions.set(sessKey(token), Date.now()); sessDirty = true; };
+  const sessionEnd = (token) => { if (sessions.delete(sessKey(token))) { sessDirty = true; sessSave(); } };
+  // true = carry on; false = the session is over (idle too long, signed out, or never started on this server)
+  // The workspace says how long ago the person last touched the page (X-Idle-Seconds). A request made by the page on
+  // its own, checking for new messages in an unattended tab, then does not count as the person being there.
+  const sessionAlive = (token, idleHeader) => {
+    if (!IDLE_MS) return true;
+    const k = sessKey(token), seen = sessions.get(k), t = Date.now();
+    if (seen === undefined) return false;
+    const idle = Number(idleHeader), claimed = idleHeader !== undefined && Number.isFinite(idle) && idle >= 0 ? t - idle * 1000 : t;
+    // too long since the last sign of the person, or the page itself says they have been away too long
+    if (t - seen > IDLE_MS || t - claimed > IDLE_MS) { sessions.delete(k); sessDirty = true; return false; }
+    sessions.set(k, Math.min(t, Math.max(seen, claimed))); sessDirty = true; return true;
+  };
+
   function requireAdmin(req, res, next) {
     if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
     const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
     const payload = m && verifyToken(m[1], cfg.sessionSecret);
+    if (payload && (!payload.role || payload.role === "staff") && !sessionAlive(m[1], req.get("x-idle-seconds"))) return res.status(401).json({ error: "You were signed out after a period without activity. Please sign in again.", idle: true });
+    req.staffToken = m ? m[1] : "";
     const email = payload ? String(payload.sub || "").trim().toLowerCase() : "";
     const again = () => res.status(401).json({ error: "Please log in again." });
     if (!payload || !email) return again();
-    if (isSignedOut(m[1])) return again();
-    req.staffToken = { token: m[1], exp: payload.exp };
     if (email === cfg.adminEmail) {
       // A member or board token can never be an owner token: those carry a role, and the owner's does not.
       if (payload.role) return again();
@@ -991,7 +1009,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     if (!isOwner) { staff.noteLogin(person.id); req.loginActor = `admin:${email}`; }
     activity("login", { email, via, ...(isOwner ? {} : { role: person.role, staffId: person.id }) });
     const payload = isOwner ? { sub: email, exp } : { sub: email, role: "staff", pwv: person.pwv || 0, exp };
-    res.json({ token: signToken(payload, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
+    const token = signToken(payload, cfg.sessionSecret);
+    sessionStart(token);
+    res.json({ token, expiresAt: new Date(exp).toISOString() });
   }
   // Sign in with Google for the owner and staff (the workspace at /admin and the manager's console at /manager).
   // Google proves the address; it must be the owner's ADMIN_EMAIL or an active staff account's email, verified by
@@ -1034,8 +1054,6 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   });
 
   // Change your own password. The owner's password is a hash in the host's variables, not in the store.
-  // Sign out: this sign-in stops working everywhere (the workspace, the older admin and the consoles all call it)
-  admin.post("/me/logout", (req, res) => { signOutToken(req.staffToken.token, req.staffToken.exp); res.json({ ok: true }); });
   admin.post("/me/password", (req, res) => {
     const b = req.body || {};
     if (req.account.isOwner) return res.status(400).json({ error: "The owner's password is set in the host's variables (ADMIN_PASSWORD_HASH), not here. Make a new hash with `npm run hash-password` and update that variable." });
@@ -1044,7 +1062,9 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     if (out.wrong) return res.status(403).json({ error: "Your current password is wrong." });
     // The change signs out every session under the old password, this one included: it carries on with a new token
     const exp = Date.now() + SESSION_HOURS * 3600e3;
-    res.json({ ok: true, token: signToken({ sub: req.account.email, role: "staff", pwv: out.pwv, exp }, cfg.sessionSecret), expiresAt: new Date(exp).toISOString() });
+    const token = signToken({ sub: req.account.email, role: "staff", pwv: out.pwv, exp }, cfg.sessionSecret);
+    if (req.staffToken) sessionEnd(req.staffToken); sessionStart(token); // the old session is over; the new one is entered like any sign-in
+    res.json({ ok: true, token, expiresAt: new Date(exp).toISOString() });
   });
   // An account that may never see patient data (a Manager or Developer, lib/staff.js) gets the counts on the screens
   // below and nothing that names a person: no names online, no appointments, no feed details, no owner pushes.
@@ -1595,6 +1615,12 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/board").mountBoard({ app, store, cfg, limiter, logger }); // private two-person notes board behind BOARD_PASSCODE
   require("./lib/valuation").mountValuation({ app, cfg, limiter, logger }); // the valuation workbench behind VALUATION_PASSCODE (or BOARD_PASSCODE)
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
+  const hipaaApi = mountHipaa({ app, admin, store, cfg, notify, activity, limiter, audit, appointments, ...cl });
+  // Sign out: the session ends on the server, not just in the browser
+  admin.post("/logout", (req, res) => { if (req.staffToken) sessionEnd(req.staffToken); res.json({ ok: true }); });
+  mountCompliance({ admin, store, cfg, audit, staff, hipaa: hipaaApi, clients: cl.clients, today: cl.today, mfaOn, emailOn: () => notify.enabled, calendarOn: () => !!(cfg.googleServiceAccount && cfg.googleCalendarId),
+    aiOn: () => !!(process.env.SCRIBE_API_URL || process.env.AI_API_URL || process.env.SCRIBE_API_KEY || process.env.AI_API_KEY), backupBlocked: () => { const b = app.get("backupApi"); return b && b.blocked ? b.blocked() : "The backup job is not loaded."; },
+    backupState: () => store.read("backupWeekly", {}), idleMinutes: IDLE_MIN, lockout: 10 });
   mountFeedbackReports({ app, admin, store, me: cl.me, cfg, notify, activity, limiter });
   require("./lib/presence").mountPresence({ app, store, cfg, ...cl }); // time in app: heartbeats from the member app, minutes per day
   require("./lib/habits").mountHabits({ app, admin, store, ...cl }); // daily activities checklist (extra XP), qualifying days, streak repairs
@@ -1705,6 +1731,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   }
 
   const notesApi = require("./lib/notes").mountNotes({ admin, store, cfg, audit, clients: cl.clients });
+  app.set("notesApi", notesApi); // lib/hipaa.js puts clinical notes in a staff export of one patient's record
   // Export of client data, for chosen clients or everyone: a spreadsheet, or full records (audited, staff only)
   const exportApi = require("./lib/export").mountExport({ app, admin, audit, activity, limiter, clients: cl.clients, appointments, today: cl.today, toCsv, notesApi });
   app.set("backupApi", require("./lib/backup").mountBackup({ admin, store, cfg, audit, activity, limiter, notify, logger, exportApi, nowParts }));
