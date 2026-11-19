@@ -58,12 +58,16 @@ test("partner share: categories by Exhibit A, Net Revenue after Stripe's fee, cl
   const s = await start(t);
   const mgr = await s.staffLogin({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
   const dev = await s.staffLogin({ name: "Dev Person", email: "dev@example.com", role: "developer" });
-  // The console is one person's (MANAGER_EMAIL): not the developer, not another Manager account. The owner may look.
+  // Acting in the console is one person's (MANAGER_EMAIL). The owner and other Manager accounts may look; a developer may not.
   const r0 = await s.call("GET", "/api/admin/partner/share", undefined, mgr.token);
   assert.equal(r0.status, 200); assert.equal(r0.body.enabled, false, "the manager sees it isn't switched on yet");
   assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, dev.token)).status, 403);
   const other = await s.staffLogin({ name: "Other Manager", email: "other@example.com", role: "manager" });
-  assert.equal((await s.call("GET", "/api/admin/partner/share", undefined, other.token)).status, 403);
+  { const seen = await s.call("GET", "/api/admin/partner/share", undefined, other.token);
+    assert.equal(seen.status, 200, "anyone the owner gave the Manager role can look"); assert.equal(seen.body.viewOnly, true);
+    const no = await s.call("POST", "/api/admin/partner/partners", { name: "Not Mine", type: "gym", ratePct: 10 }, other.token);
+    assert.equal(no.status, 403, "but only the named manager acts"); assert.equal(no.body.viewOnly, true);
+    assert.equal((await s.call("POST", "/api/admin/partner/stripe/session", {}, other.token)).status, 403, "and nobody else opens the manager's bank details"); }
   { const seen = await s.call("GET", "/api/admin/partner/share", undefined, s.owner);
     assert.equal(seen.status, 200, "the owner can look at the manager console"); assert.equal(seen.body.viewOnly, true);
     for (const u of ["/api/admin/partner/statement", "/api/admin/partner/statement.csv", "/api/admin/partner/stripe/status", "/api/admin/partner/patf"]) assert.equal((await s.call("GET", u, undefined, s.owner)).status, 200, u);
