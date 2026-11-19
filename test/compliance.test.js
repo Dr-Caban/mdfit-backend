@@ -27,7 +27,7 @@ async function start(extra = {}) {
   const owner = await login("owner@example.com", "owner-pass-123");
   const mk = async (role, email = `${role}@example.com`) => { const r = await call("POST", "/api/admin/staff", { name: role + " person", email, role, password: "staff-pass-1234" }, owner); assert.equal(r.status, 201, JSON.stringify(r.body)); return login(email, "staff-pass-1234"); };
   const restart = async () => { server.closeAllConnections(); await new Promise((r) => server.close(r)); server = createApp(cfg).listen(port); await new Promise((r) => server.once("listening", r)); };
-  return { call, login, owner, mk, restart, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
+  return { call, login, owner, mk, restart, port, close: () => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); } };
 }
 const row = (list, id) => list.rows.find((r) => r.id === id);
 
@@ -41,6 +41,12 @@ test("automatic logoff is enforced by the server: idle sessions end, sign-out en
     const idle = await s.call("GET", "/api/admin/me", undefined, t);
     assert.equal(idle.status, 401); assert.equal(idle.body.idle, true, "the same token is refused once it has sat idle");
     assert.equal((await s.call("GET", "/api/admin/me", undefined, t)).status, 401, "and it stays refused");
+    // a page left open keeps asking for new messages; it says how long the person has been away, so that does not count
+    t = await s.login("owner@example.com", "owner-pass-123");
+    const poll = (idleSeconds) => fetch(`http://127.0.0.1:${s.port}/api/admin/me`, { headers: { authorization: "Bearer " + t, connection: "close", "x-idle-seconds": String(idleSeconds) } }).then((r) => r.status);
+    assert.equal(await poll(0), 200);
+    await wait(300); assert.equal(await poll(0.3), 200, "still inside the idle time");
+    await wait(500); assert.equal(await poll(0.8), 401, "background requests from an unattended page do not keep the session open");
     // sign-out
     t = await s.login("owner@example.com", "owner-pass-123");
     assert.equal((await s.call("POST", "/api/admin/logout", {}, t)).status, 200);

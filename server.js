@@ -551,7 +551,7 @@ function createApp(cfg = loadConfig()) {
     if (origin && (cfg.origins.includes("*") || cfg.origins.includes(origin))) {
       res.set("Access-Control-Allow-Origin", origin);
       res.set("Vary", "Origin");
-      res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-File-Name");
+      res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-File-Name, X-Idle-Seconds");
       res.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -607,19 +607,23 @@ function createApp(cfg = loadConfig()) {
   const sessionStart = (token) => { sessions.set(sessKey(token), Date.now()); sessDirty = true; };
   const sessionEnd = (token) => { if (sessions.delete(sessKey(token))) { sessDirty = true; sessSave(); } };
   // true = carry on; false = the session is over (idle too long, signed out, or never started on this server)
-  const sessionAlive = (token) => {
+  // The workspace says how long ago the person last touched the page (X-Idle-Seconds). A request made by the page on
+  // its own, checking for new messages in an unattended tab, then does not count as the person being there.
+  const sessionAlive = (token, idleHeader) => {
     if (!IDLE_MS) return true;
     const k = sessKey(token), seen = sessions.get(k), t = Date.now();
     if (seen === undefined) return false;
-    if (t - seen > IDLE_MS) { sessions.delete(k); sessDirty = true; return false; }
-    sessions.set(k, t); sessDirty = true; return true;
+    const idle = Number(idleHeader), claimed = idleHeader !== undefined && Number.isFinite(idle) && idle >= 0 ? t - idle * 1000 : t;
+    // too long since the last sign of the person, or the page itself says they have been away too long
+    if (t - seen > IDLE_MS || t - claimed > IDLE_MS) { sessions.delete(k); sessDirty = true; return false; }
+    sessions.set(k, Math.min(t, Math.max(seen, claimed))); sessDirty = true; return true;
   };
 
   function requireAdmin(req, res, next) {
     if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
     const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
     const payload = m && verifyToken(m[1], cfg.sessionSecret);
-    if (payload && (!payload.role || payload.role === "staff") && !sessionAlive(m[1])) return res.status(401).json({ error: "You were signed out after a period without activity. Please sign in again.", idle: true });
+    if (payload && (!payload.role || payload.role === "staff") && !sessionAlive(m[1], req.get("x-idle-seconds"))) return res.status(401).json({ error: "You were signed out after a period without activity. Please sign in again.", idle: true });
     req.staffToken = m ? m[1] : "";
     const email = payload ? String(payload.sub || "").trim().toLowerCase() : "";
     const again = () => res.status(401).json({ error: "Please log in again." });
