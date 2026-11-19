@@ -423,7 +423,9 @@ test("staff sign-in: per-email rate limiting, and /me/password", async (t) => {
 
   const ok = await s.call("POST", "/api/admin/me/password", { current: st.password, password: "brand-new-pass-99" }, st.token);
   assert.equal(ok.status, 200);
-  assert.equal((await s.call("GET", "/api/admin/me", undefined, st.token)).body.mustChangePassword, false);
+  // the change ends every session under the old password; this one carries on with the token in the answer
+  assert.equal((await s.call("GET", "/api/admin/me", undefined, st.token)).status, 401);
+  assert.equal((await s.call("GET", "/api/admin/me", undefined, ok.body.token)).body.mustChangePassword, false);
   assert.equal((await s.login("sam@example.com", "brand-new-pass-99")).status, 200);
 
   // The owner's password isn't kept here
