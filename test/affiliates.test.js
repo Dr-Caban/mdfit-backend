@@ -62,17 +62,21 @@ test("affiliates: join, earn 5% of a referred friend's subscription, hold, Strip
 
   // The owner switches it on. A tier that does not exist cannot be made eligible; every Recurring Membership tier
   // can (Agreement 4.3, Exhibit A: "including plans with remote one-on-one sessions"), though none is until ticked.
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true })).status, 401, "owner only");
-  let r = await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "no-such-tier"] }, adm);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", enabled: true })).status, 401, "owner only");
+  // being signed in as the owner is not enough: the owner password is asked for on every change
+  { const no = await s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 9 }, adm); assert.equal(no.status, 403); assert.equal(no.body.needsPassword, true);
+    assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "not-the-password", ratePct: 9 }, adm)).status, 403);
+    assert.notEqual((await s.call("GET", "/api/admin/affiliates", undefined, adm)).body.settings.ratePct, 9, "nothing was changed"); }
+  let r = await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", eligibleTiers: ["member", "no-such-tier"] }, adm);
   assert.equal(r.status, 400); assert.match(r.body.error, /no subscription tier/);
-  r = await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "accountability", "expert"] }, adm);
+  r = await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", eligibleTiers: ["member", "accountability", "expert"] }, adm);
   assert.equal(r.status, 200); assert.deepEqual(r.body.settings.eligibleTiers, ["member", "accountability", "expert"]);
   assert.equal(JSON.stringify(r.body).includes("clinical"), false, "no tier is marked as unable to earn");
-  await s.call("PUT", "/api/admin/affiliates/settings", { eligibleTiers: ["member", "accountability"] }, adm);
-  r = await s.call("PUT", "/api/admin/affiliates/settings", { enabled: true, ratePct: 5, holdDays: 7, minPayoutCents: 2500 }, adm);
+  await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", eligibleTiers: ["member", "accountability"] }, adm);
+  r = await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", enabled: true, ratePct: 5, holdDays: 7, minPayoutCents: 2500 }, adm);
   assert.equal(r.status, 200); assert.deepEqual(r.body.settings.eligibleTiers, ["member", "accountability"]);
   assert.deepEqual(r.body.tiers.filter((x) => x.clinical).map((x) => x.id), [], "no tier is fenced off; the owner chooses which earn");
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { ratePct: 51 }, adm)).status, 400);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", ratePct: 51 }, adm)).status, 400);
 
   // Sam pays before Pat has joined: no commission (the programme is opt-in)
   assert.equal(await hook(invoice({ id: "in_1" })), 200);
@@ -122,7 +126,7 @@ test("affiliates: join, earn 5% of a referred friend's subscription, hold, Strip
   assert.equal((await s.call("GET", "/api/me/affiliate/stripe/status", undefined, pat)).body.payoutsEnabled, true);
   out = (await s.call("POST", "/api/admin/affiliates/run", { job: "payout" }, adm)).body;
   assert.equal(out.paid.length, 0); assert.match(out.skipped[0].why, /under the \$25\.00 minimum/);
-  await s.call("PUT", "/api/admin/affiliates/settings", { minPayoutCents: 100 }, adm);
+  await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", minPayoutCents: 100 }, adm);
   out = (await s.call("POST", "/api/admin/affiliates/run", { job: "payout" }, adm)).body;
   assert.deepEqual(out.paid.map((p) => [p.clientId, p.cents]), [[P.id, 100]]);
   const tr = calls.find((c) => c[0] === "transfers.create")[1];
@@ -169,7 +173,7 @@ test("affiliates: the free month for a referral can be switched off once commiss
   await signup(s, { name: "Sam Roe", email: "sam@example.com", referralCode: code });
   let P = s.readJson("clients").find((c) => c.email === "pat@example.com");
   assert.equal(P.membership && P.membership.tier, "member", "the free month, as before");
-  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { freeMonthReward: false }, adm)).status, 200);
+  assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "admin-pass-123", freeMonthReward: false }, adm)).status, 200);
   await signup(s, { name: "Lee Poe", email: "lee@example.com", referralCode: code });
   P = s.readJson("clients").find((c) => c.email === "pat@example.com");
   assert.equal(P.referrals, 2, "the referral is still counted");
