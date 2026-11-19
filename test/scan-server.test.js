@@ -359,19 +359,18 @@ test("staff: switching an account back on is held to the same rule as granting w
   assert.equal((await s.login(clin.email, clin.password)).status, 200);
 });
 
-test("staff sessions end when the password changes; a token from before this rule works until then", async (t) => {
+test("staff sessions end when the password changes", async (t) => {
   const s = await start(); t.after(s.close);
   const A = await s.ownerToken(), st = await s.makeStaff({ role: "frontdesk" });
   const me = (tok) => s.call("GET", "/api/admin/me", undefined, tok);
-  // A session opened before tokens carried a password version: no "pwv" in it
-  const old = signToken({ sub: st.email, role: "staff", exp: Date.now() + 3600e3 }, SECRET);
-  assert.equal((await me(old)).status, 200, "nobody is signed out by the update itself");
+  // (Staff sessions now live on the server, so a token the server did not issue itself is refused whatever it says:
+  // there is no older kind of token left to carry over.)
   assert.equal((await me(st.token)).status, 200);
 
   // The owner resets the password: every session under the old one stops at once
   const reset = await s.call("POST", `/api/admin/staff/${st.record.id}/password`, { password: "brand-new-pass-99" }, A);
   assert.equal(reset.status, 200); assert.equal("pwv" in reset.body.staff, false, "the version is not part of what a screen is sent");
-  assert.equal((await me(st.token)).status, 401); assert.equal((await me(old)).status, 401);
+  assert.equal((await me(st.token)).status, 401);
   const again = (await s.login(st.email, "brand-new-pass-99")).body.token;
   assert.equal((await me(again)).status, 200);
 
