@@ -324,14 +324,16 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   assert.deepEqual([(await ask(`${MARK} sore knee`, mel.token)).body.used, m.seen.length], [1000, 2]);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.left, null);
 
-  // the service fails, or answers nonsense: the app falls back to the device, and nothing is counted
+  // the service fails, or answers nonsense: the app falls back to the device. A refusal costs nothing; a reply the
+  // model did write, but that could not be read, is counted at what was held for it (the last answer's cost)
   assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1000);
   assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
-  assert.equal(m.seen.length, 4); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1000);
+  assert.equal(m.seen.length, 4); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 2000);
 
   // at the limit the model is not called, and the hit is recorded like any other
   await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
-  assert.deepEqual((await ask(`${MARK} one more about my knee`)).body, { ok: false, limited: true, used: 1000, limit: 1000, left: 0, unit: "tokens" });
+  assert.deepEqual((await ask(`${MARK} one more about my knee`)).body, { ok: false, limited: true, used: 2000, limit: 1000, left: 0, unit: "tokens" });
   assert.equal(m.seen.length, 4);
   const stats = (await s.call("GET", "/api/admin/guide/stats?days=7", undefined, A)).body;
   assert.deepEqual([stats.totals.answers, stats.totals.limitHits, stats.totals.limitPeople], [2, 1, 1]);
