@@ -600,6 +600,18 @@ function createApp(cfg = loadConfig()) {
   const NOT_SET_UP = "Admin login isn't set up on the server (ADMIN_EMAIL, ADMIN_PASSWORD_HASH, SESSION_SECRET).";
   // The owner has no staff record, so /me reports the reserved id "owner" (lib/staff.js never issues it).
   const OWNER_ACCOUNT = () => ({ isOwner: true, id: staff.OWNER_ID, email: cfg.adminEmail, name: "Owner", role: "owner", permissions: [...staff.PERMISSION_KEYS] });
+  // Signing out ends that sign-in on the server too, so a copy of it kept somewhere stops working at once and not
+  // 12 hours later. Only a fingerprint of the token is kept, and only until the token would have expired anyway.
+  const outPrint = (t) => crypto.createHash("sha256").update("mdfit-signed-out:" + t).digest("hex").slice(0, 32);
+  let signedOut = null;
+  const outList = () => { if (!signedOut) signedOut = new Map((store.read("signedOut", []) || []).map((x) => [x.h, x.exp])); return signedOut; };
+  function signOutToken(token, exp) {
+    const m = outList(), now = Date.now();
+    for (const [h, e] of m) if (e <= now) m.delete(h);
+    m.set(outPrint(token), Number(exp) > now ? Number(exp) : now + 12 * 3600e3);
+    store.write("signedOut", [...m].slice(-5000).map(([h, e]) => ({ h, exp: e })));
+  }
+  const isSignedOut = (token) => { const e = outList().get(outPrint(token)); return !!e && e > Date.now(); };
   function requireAdmin(req, res, next) {
     if (!authReady) return res.status(503).json({ error: NOT_SET_UP });
     const m = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
@@ -607,6 +619,8 @@ function createApp(cfg = loadConfig()) {
     const email = payload ? String(payload.sub || "").trim().toLowerCase() : "";
     const again = () => res.status(401).json({ error: "Please log in again." });
     if (!payload || !email) return again();
+    if (isSignedOut(m[1])) return again();
+    req.staffToken = { token: m[1], exp: payload.exp };
     if (email === cfg.adminEmail) {
       // A member or board token can never be an owner token: those carry a role, and the owner's does not.
       if (payload.role) return again();
@@ -1020,6 +1034,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   });
 
   // Change your own password. The owner's password is a hash in the host's variables, not in the store.
+  // Sign out: this sign-in stops working everywhere (the workspace, the older admin and the consoles all call it)
+  admin.post("/me/logout", (req, res) => { signOutToken(req.staffToken.token, req.staffToken.exp); res.json({ ok: true }); });
   admin.post("/me/password", (req, res) => {
     const b = req.body || {};
     if (req.account.isOwner) return res.status(400).json({ error: "The owner's password is set in the host's variables (ADMIN_PASSWORD_HASH), not here. Make a new hash with `npm run hash-password` and update that variable." });
