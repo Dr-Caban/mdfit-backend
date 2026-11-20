@@ -1739,6 +1739,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/refunds").mountRefunds({ app, admin, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, checkPassword: (p) => !!p && verifyPassword(p, cfg.adminPasswordHash) });
   require("./lib/economics").mountEconomics({ app, admin, store, logger, clients: cl.clients, appointments, tiers: pay.tiers, income: pay.income, today: cl.today,
     now: () => cfg.now(), monthOf: (d) => nowParts(cfg.tz, d).date.slice(0, 7) });
+  require("./lib/sp-import").mountSpImport({ app, admin, store, cfg, audit, activity, clients: cl.clients, save: cl.save }); // owner only: the previous EMR's records
   require("./lib/emr").mountEmr({ app, admin, store, cfg, notify, activity, audit, settings, appointments, payEnabled: pay.enabled, booking: emrBooking, videoRoom, ...cl });
   require("./lib/invoicing").mountInvoicing({ app, admin, me: cl.me, store, cfg, notify, audit, limiter, logger, clients: cl.clients, payApi: pay, now: () => cfg.now() });
   // The Progress calendar: invoices, card payments and membership dates, and a live "calendar_changed" to the member's
