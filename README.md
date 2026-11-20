@@ -23,6 +23,7 @@ for that exact change in writing in the session. A bug fix elsewhere is never a 
 | Compliance registers, audit review, checklist | `lib/compliance.js` | §164.308, §164.310, §164.316 |
 | Weekly encrypted backup | `lib/backup.js` | §164.308(a)(7) |
 | Business-associate allowlist for AI services | `lib/baa.js` | §164.504(e) |
+| SimplePractice import (owner only, undoable, records keep their source) | `lib/sp-import.js`, import helpers in `lib/emr.js` | §164.312(b), record retention |
 | Client trash keeps the chart | `lib/clients.js` (`finalize`, `clinicalFootprint`) | Record retention |
 | Agreement locks: revenue share and commission settings | `lib/partner-share.js`, `lib/affiliates.js` | Agreement Rev. 2 |
 
