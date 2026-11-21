@@ -136,7 +136,8 @@ test("names shared by two accounts are never guessed", async () => {
     await s.call("POST", "/api/admin/clients", { name: "Sam Twin", email: "sam2@example.com" }, s.owner);
     const r = await s.call("POST", "/api/admin/import/sp/plan", { contacts: [{ key: "x", name: "Sam Twin" }, { key: "y", name: "Sam Twin", email: "sam3@example.com" }] }, s.owner);
     const x = r.body.rows.find((q) => q.key === "x"), y = r.body.rows.find((q) => q.key === "y");
-    assert.equal(x.how, "ambiguous"); assert.equal(x.candidates.length, 2); assert.equal(x.action, "new");
-    assert.equal(y.action, "new", "a different email is a different person");
+    // a name on two accounts is never auto-linked and never silently duplicated: the owner is asked to choose
+    assert.equal(x.action, "confirm"); assert.equal(x.candidates.length, 2);
+    assert.equal(y.action, "confirm", "a different email still shows the two same-name accounts to choose from"); assert.equal(y.candidates.length, 2);
   } finally { s.close(); }
 });
