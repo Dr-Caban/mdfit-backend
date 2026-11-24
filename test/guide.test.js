@@ -45,7 +45,7 @@ test("guide: a free account gets 50,000 tokens a day by default; an answer on th
 
   let g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body;
   assert.deepEqual({ plan: g.plan, unit: g.unit, limit: g.limit, used: g.used, left: g.left }, { plan: "free", unit: "tokens", limit: 50000, used: 0, left: 50000 }, "the default is 50,000 tokens");
-  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all" });
+  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full" });
   assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freeTokensPerDay, 50000);
   assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 300, limit: 50000, left: 49700 });
 
@@ -180,18 +180,37 @@ test("guide: looks are checked and kept on the account", async (t) => {
   const s = await start(); t.after(s.close);
   const fay = await s.signup("Fay Free"), u = "/api/me/prefs";
   for (const bad of [{ theme: "purple" }, { layout: "huge" }, { theme: "black", layout: 3 }, { theme: null }]) assert.equal((await s.call("PUT", u, bad, fay.token)).status, 400, JSON.stringify(bad));
-  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all" } });
-  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all" } });
-  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all" } });
+  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "full" } });
+  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all", view: "full" } });
+  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all", view: "full" } });
   const again = (await s.call("POST", "/api/clients/login", { email: "fay.free@example.com", password: "made-up-pass-1" })).body;
-  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all" }, "the same on another device");
-  assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all" });
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all", view: "full" }, "the same on another device");
+  assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all", view: "full" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full" });
   // Reminders from Solomon: all (default), the evening streak one only, or off
   assert.equal((await s.call("PUT", u, { nudges: "streaks" }, fay.token)).body.prefs.nudges, "streaks");
   assert.equal((await s.call("PUT", u, { nudges: "off" }, fay.token)).body.prefs.nudges, "off");
   assert.equal((await s.call("PUT", u, { nudges: "loud" }, fay.token)).status, 400);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, fay.token)).body.prefs.nudges, "off");
-  await s.call("PUT", u, { nudges: "all" }, fay.token);
+  await s.call("PUT", u, { nudges: "all", view: "full" }, fay.token);
+});
+
+test("guide: Home view is full by default, simple is kept on the account, anything else is refused", async (t) => {
+  const s = await start(); t.after(s.close);
+  const sam = await s.signup("Sam Simple"), u = "/api/me/prefs";
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, sam.token)).body.prefs.view, "full");
+  assert.deepEqual((await s.call("PUT", u, { view: "simple" }, sam.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "simple" } });
+  const again = (await s.call("POST", "/api/clients/login", { email: "sam.simple@example.com", password: "made-up-pass-1" })).body;
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs.view, "simple", "the same on another device");
+  for (const bad of ["plain", "", null, 1]) {
+    const r = await s.call("PUT", u, { view: bad }, sam.token);
+    assert.equal(r.status, 400, JSON.stringify(bad)); assert.equal(r.body.error, "Home view must be full or simple.");
+  }
+  // A refused value changes nothing, even beside a valid one
+  assert.equal((await s.call("PUT", u, { theme: "black", view: "plain" }, sam.token)).status, 400);
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, sam.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "simple" });
+  // The other looks leave it alone, and it switches back
+  assert.equal((await s.call("PUT", u, { theme: "black" }, sam.token)).body.prefs.view, "simple");
+  assert.equal((await s.call("PUT", u, { view: "full" }, sam.token)).body.prefs.view, "full");
 });
 
 test("guide: the owner's numbers add up, day by day, and count who upgraded after hitting the limit", async (t) => {

@@ -104,9 +104,10 @@ test("assign -> follow -> progress -> unassign -> re-assign keeps the note; the 
   const raw = fs.readFileSync(path.join(s.dataDir, "clients.json"), "utf8");
   assert.ok(!raw.includes("meniscus"), "program notes are not stored in plain text");
 
-  // Emails: the client hears a program was added, never the clinical note
-  for (let i = 0; i < 300 && !sent.some((m) => /program/i.test(m.subject)); i++) await new Promise((res) => setTimeout(res, 20));
-  const mails = sent.filter((m) => /program/i.test(m.subject));
+  // Emails: the client hears something was added to their care plan (one message for anything added from the chart,
+  // lib/clients.js careAdded), never the clinical note
+  for (let i = 0; i < 300 && !sent.some((m) => /care plan/i.test(m.subject)); i++) await new Promise((res) => setTimeout(res, 20));
+  const mails = sent.filter((m) => /care plan/i.test(m.subject));
   assert.ok(mails.length >= 1);
   for (const m of mails) assert.ok(!/meniscus|3\/10|Off-season/.test(JSON.stringify(m)), "no note text in the email");
 });
