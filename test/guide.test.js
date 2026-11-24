@@ -45,7 +45,7 @@ test("guide: a free account gets 50,000 tokens a day by default; an answer on th
 
   let g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body;
   assert.deepEqual({ plan: g.plan, unit: g.unit, limit: g.limit, used: g.used, left: g.left }, { plan: "free", unit: "tokens", limit: 50000, used: 0, left: 50000 }, "the default is 50,000 tokens");
-  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full" });
+  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" });
   assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freeTokensPerDay, 50000);
   assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 300, limit: 50000, left: 49700 });
 
@@ -180,25 +180,25 @@ test("guide: looks are checked and kept on the account", async (t) => {
   const s = await start(); t.after(s.close);
   const fay = await s.signup("Fay Free"), u = "/api/me/prefs";
   for (const bad of [{ theme: "purple" }, { layout: "huge" }, { theme: "black", layout: 3 }, { theme: null }]) assert.equal((await s.call("PUT", u, bad, fay.token)).status, 400, JSON.stringify(bad));
-  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "full" } });
-  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all", view: "full" } });
-  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all", view: "full" } });
+  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" } });
+  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all", view: "full", verse: "on" } });
+  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "on" } });
   const again = (await s.call("POST", "/api/clients/login", { email: "fay.free@example.com", password: "made-up-pass-1" })).body;
-  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all", view: "full" }, "the same on another device");
-  assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all", view: "full" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full" });
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "on" }, "the same on another device");
+  assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" });
   // Reminders from Solomon: all (default), the evening streak one only, or off
   assert.equal((await s.call("PUT", u, { nudges: "streaks" }, fay.token)).body.prefs.nudges, "streaks");
   assert.equal((await s.call("PUT", u, { nudges: "off" }, fay.token)).body.prefs.nudges, "off");
   assert.equal((await s.call("PUT", u, { nudges: "loud" }, fay.token)).status, 400);
   assert.equal((await s.call("GET", "/api/me/guide", undefined, fay.token)).body.prefs.nudges, "off");
-  await s.call("PUT", u, { nudges: "all", view: "full" }, fay.token);
+  await s.call("PUT", u, { nudges: "all", view: "full", verse: "on" }, fay.token);
 });
 
 test("guide: Home view is full by default, simple is kept on the account, anything else is refused", async (t) => {
   const s = await start(); t.after(s.close);
   const sam = await s.signup("Sam Simple"), u = "/api/me/prefs";
   assert.equal((await s.call("GET", "/api/me/guide", undefined, sam.token)).body.prefs.view, "full");
-  assert.deepEqual((await s.call("PUT", u, { view: "simple" }, sam.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "simple" } });
+  assert.deepEqual((await s.call("PUT", u, { view: "simple", verse: "on" }, sam.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "simple", verse: "on" } });
   const again = (await s.call("POST", "/api/clients/login", { email: "sam.simple@example.com", password: "made-up-pass-1" })).body;
   assert.equal((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs.view, "simple", "the same on another device");
   for (const bad of ["plain", "", null, 1]) {
@@ -207,10 +207,10 @@ test("guide: Home view is full by default, simple is kept on the account, anythi
   }
   // A refused value changes nothing, even beside a valid one
   assert.equal((await s.call("PUT", u, { theme: "black", view: "plain" }, sam.token)).status, 400);
-  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, sam.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "simple" });
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, sam.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "simple", verse: "on" });
   // The other looks leave it alone, and it switches back
   assert.equal((await s.call("PUT", u, { theme: "black" }, sam.token)).body.prefs.view, "simple");
-  assert.equal((await s.call("PUT", u, { view: "full" }, sam.token)).body.prefs.view, "full");
+  assert.equal((await s.call("PUT", u, { view: "full", verse: "on" }, sam.token)).body.prefs.view, "full");
 });
 
 test("guide: the owner's numbers add up, day by day, and count who upgraded after hitting the limit", async (t) => {
@@ -369,4 +369,17 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   // and one account cannot fire dozens a minute at it: Zed has sent twelve in this minute (the refused ones count too)
   const thirteenth = await ask("where are the programs");
   assert.equal(thirteenth.status, 429); assert.equal(m.seen.length, 4);
+});
+
+test("guide: the daily Bible verse is on by default, can be turned off, and anything else is refused", async (t) => {
+  const s = await start(); t.after(s.close);
+  const vi = await s.signup("Vi Verse"), u = "/api/me/prefs";
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, vi.token)).body.prefs.verse, "on");
+  assert.equal((await s.call("PUT", u, { verse: "off" }, vi.token)).body.prefs.verse, "off");
+  const again = (await s.call("POST", "/api/clients/login", { email: "vi.verse@example.com", password: "made-up-pass-1" })).body;
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs.verse, "off", "the same on another device");
+  const bad = await s.call("PUT", u, { verse: "sometimes" }, vi.token);
+  assert.equal(bad.status, 400); assert.equal(bad.body.error, "Daily Bible verse is on or off.");
+  assert.equal((await s.call("PUT", u, { theme: "black" }, vi.token)).body.prefs.verse, "off", "other looks leave it alone");
+  assert.equal((await s.call("PUT", u, { verse: "on" }, vi.token)).body.prefs.verse, "on");
 });
