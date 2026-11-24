@@ -1754,6 +1754,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership, activePlan: cl.activePlan, isInpatient: cl.isInpatient, fullAccess: cl.fullAccess });
 
+  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today }); // Insights: what members do inside the app (counts only)
+
   mountStaff({ admin, staff, activity }); // /api/admin/staff: the owner (and anyone with "staff") manages accounts
 
   app.use("/api/admin", admin);
