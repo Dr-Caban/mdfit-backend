@@ -35,6 +35,11 @@ test("send MD Fit things to a member: inbox, status, limits, privacy", async () 
     // The recipient's inbox: the sender's short name only
     const inbox = (await call("GET", "/api/me/sends", undefined, b.token)).body.inbox;
     assert.equal(inbox.length, 5); assert.ok(inbox.every((x) => x.from === "Ann L." && x.status === "waiting"));
+    // The sender's words never travel: names come from MD Fit (or are left for the app to look up by id)
+    assert.equal(inbox.find((x) => x.kind === "video").title, require("../lib/exercises.json").exercises[0].name);
+    assert.equal(inbox.find((x) => x.kind === "program").title, "PSG — State of Perpetual Growth");
+    assert.equal(inbox.find((x) => x.kind === "track").title, ""); assert.equal(inbox.find((x) => x.kind === "protocol").title, "");
+    assert.ok(!JSON.stringify(inbox).includes("A tip"));
     assert.ok(!JSON.stringify(inbox).includes("@example.com") && !JSON.stringify(inbox).includes(a.client.id));
     // Nobody else sees them, and only the recipient can open or dismiss
     assert.equal((await call("GET", "/api/me/sends", undefined, c.token)).body.inbox.length, 0);
@@ -44,10 +49,13 @@ test("send MD Fit things to a member: inbox, status, limits, privacy", async () 
     assert.equal((await call("POST", `/api/me/sends/${video.id}/open`, undefined, b.token)).status, 200);
     // A session of the program after it was sent shows as started; the sender sees one word, nothing else
     await call("POST", "/api/me/workouts", { title: "PSG day 1", minutes: 40, exercises: 3, key: "prog-hypertrophy-12-d0" }, b.token);
+    const proto = inbox.find((x) => x.kind === "protocol");
+    await call("POST", `/api/me/sends/${proto.id}/open`, undefined, b.token);
+    await call("POST", "/api/me/workouts", { title: "Upper trap", minutes: 10, exercises: 3, key: "painproto-upper-trap" }, b.token); // pain rehab never shows as started
     await call("DELETE", `/api/me/sends/${track.id}`, undefined, b.token);
     const sent = (await call("GET", "/api/me/sends", undefined, a.token)).body.sent;
     const st = Object.fromEntries(sent.map((x) => [x.kind, x.status]));
-    assert.deepEqual(st, { video: "opened", page: "waiting", program: "started", track: "dismissed", protocol: "waiting" });
+    assert.deepEqual(st, { video: "opened", page: "waiting", program: "started", track: "dismissed", protocol: "opened" });
     assert.deepEqual(Object.keys(sent[0]).sort(), ["from", "id", "incoming", "kind", "ref", "sentOn", "status", "title", "to"]);
     assert.equal((await call("GET", "/api/me/sends", undefined, b.token)).body.inbox.length, 4); // the dismissed one is gone
   } finally { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
