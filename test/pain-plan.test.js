@@ -60,7 +60,7 @@ test("prescribe pain tracks and protocols from the chart; see what's on the clie
   } finally { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test("a prescription emails the client: what was prescribed, the note, where to find it", async () => {
+test("a prescription emails the client that something was added, never what it is or the note", async () => {
   const http = require("http"), mails = [];
   const mailer = http.createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const j = JSON.parse(b); (Array.isArray(j) ? j : [j]).forEach((m) => mails.push(m)); } catch {} res.writeHead(200, { "content-type": "application/json" }); res.end('{"id":"x"}'); }); }).listen(0);
   await new Promise((r) => mailer.once("listening", r));
@@ -74,22 +74,50 @@ test("a prescription emails the client: what was prescribed, the note, where to 
   try {
     const admin = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
     const m = (await call("POST", "/api/clients/signup", { name: "Jabari Cole", email: "jabari@example.com", phone: "941-555-0100", password: "pass-word-123" })).body;
-    const toHim = () => mails.filter((x) => [].concat(x.to).includes("jabari@example.com") && /prescribed/i.test(x.subject || ""));
-    await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator", title: "Levator scapulae → upper shoulder blade", note: "Twice a day" }] }, admin);
+    const toHim = () => mails.filter((x) => [].concat(x.to).includes("jabari@example.com") && /care plan/i.test(x.subject || ""));
+    await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator", title: "Levator scapulae → upper shoulder blade", note: "Twice a day, left side hurts most" }] }, admin);
     await wait(() => toHim().length === 1);
     let e = toHim();
     assert.equal(e.length, 1, JSON.stringify(mails.map((x) => x.subject)));
-    assert.equal(e[0].subject, "Dr. Jared prescribed: Levator scapulae → upper shoulder blade");
-    assert.match(e[0].text, /Levator scapulae → upper shoulder blade \(pain track\)/);
-    assert.match(e[0].text, /Dr\. Jared's note: Twice a day/);
-    assert.match(e[0].text, /https:\/\/mdfit\.example\.com\/account/);
-    // Saving again with nothing new sends nothing; adding one more sends one more email, about the new one only
+    assert.equal(e[0].subject, "Dr. Jared added to your care plan");
+    assert.match(e[0].text, /something new/); assert.match(e[0].text, /For privacy it isn't in this email/); assert.match(e[0].text, /https:\/\/mdfit\.example\.com\/account/);
+    assert.ok(!/Levator|scapulae|Twice a day|left side|pain track/i.test(e[0].subject + e[0].text + (e[0].html || "")), "no treatment name or note in the email");
+    // Saving with nothing new sends nothing; adding one more sends one more
     await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator", note: "Three times a day" }] }, admin);
-    await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator" }, { kind: "protocol", id: "upper-trap", title: "Upper trapezius protocol" }] }, admin);
+    await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator" }, { kind: "protocol", id: "upper-trap" }] }, admin);
     await wait(() => toHim().length === 2);
-    e = toHim();
-    assert.equal(e.length, 2);
-    assert.equal(e[1].subject, "Dr. Jared prescribed: Upper trapezius protocol");
-    assert.ok(!/Levator/.test(e[1].text));
+    assert.equal(toHim().length, 2);
+  } finally { server.close(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("anything added from the chart emails the client once, the same private message; removing sends nothing", async () => {
+  const http = require("http"), mails = [];
+  const mailer = http.createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const j = JSON.parse(b); (Array.isArray(j) ? j : [j]).forEach((m) => mails.push(m)); } catch {} res.writeHead(200, { "content-type": "application/json" }); res.end('{"id":"x"}'); }); }).listen(0);
+  await new Promise((r) => mailer.once("listening", r));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-caremail-"));
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date(), siteUrl: "https://mdfit.example.com",
+    resendKey: "test-key", notifyFrom: "MD Fit <hello@example.com>", resendUrl: `http://127.0.0.1:${mailer.address().port}`, notifyGapMs: 0 });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, url, body, token) => { const r = await fetch(base + url, { method, headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => undefined) }; };
+  const pause = () => new Promise((r) => setTimeout(r, 400));
+  try {
+    const admin = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+    const m = (await call("POST", "/api/clients/signup", { name: "Jabari Cole", email: "jabari@example.com", phone: "941-555-0100", password: "pass-word-123" })).body;
+    const care = () => mails.filter((x) => [].concat(x.to).includes("jabari@example.com") && x.subject === "Dr. Jared added to your care plan");
+    const step = async (label, fn, expect) => { const n = care().length; await fn(); await pause(); assert.equal(care().length - n, expect, `${label}: ${care().length - n} emails, expected ${expect}`); };
+    const id = m.client.id;
+    await step("program added", () => call("PUT", `/api/admin/clients/${id}/programs`, { programs: [{ id: "hypertrophy-12" }] }, admin), 1);
+    await step("same programs saved again", () => call("PUT", `/api/admin/clients/${id}/programs`, { programs: [{ id: "hypertrophy-12" }] }, admin), 0);
+    await step("program removed", () => call("PUT", `/api/admin/clients/${id}/programs`, { programs: [] }, admin), 0);
+    await step("written protocol added", () => call("PUT", `/api/admin/clients/${id}/plan`, { guides: [], exercises: [{ name: "Cold shower", detail: "2 min" }], notes: "" }, admin), 1);
+    await step("plan saved with nothing new", () => call("PUT", `/api/admin/clients/${id}/plan`, { guides: [], exercises: [{ name: "Cold shower", detail: "2 min" }], notes: "" }, admin), 0);
+    await step("written protocol removed", () => call("PUT", `/api/admin/clients/${id}/plan`, { guides: [], exercises: [], notes: "" }, admin), 0);
+    await step("treatment plan written", () => call("PUT", `/api/admin/clients/${id}/plan`, { guides: [], exercises: [], notes: "Twice a week for 6 weeks" }, admin), 1);
+    await step("pain track prescribed", () => call("PUT", `/api/admin/clients/${id}/pain-plan`, { items: [{ kind: "track", id: "levator" }] }, admin), 1);
+    await step("movement added (chart)", () => call("POST", `/api/admin/emr/${id}/movements`, { videoId: require("../lib/exercises.json").exercises[0].id, name: "Ankle circles", dose: "2 × 10" }, admin), 1);
+    await step("note to the patient (chart)", () => call("POST", `/api/admin/emr/${id}/notes`, { text: "Keep going" }, admin), 1);
+    // None of them names a treatment or carries the note
+    for (const e of care()) assert.ok(!/PSG|Perpetual|Cold shower|levator|Ankle circles|Twice a week|Keep going/i.test(e.text + (e.html || "")), e.text);
   } finally { server.close(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
