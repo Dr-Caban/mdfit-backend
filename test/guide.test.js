@@ -383,3 +383,20 @@ test("guide: the daily Bible verse is on by default, can be turned off, and anyt
   assert.equal((await s.call("PUT", u, { theme: "black" }, vi.token)).body.prefs.verse, "off", "other looks leave it alone");
   assert.equal((await s.call("PUT", u, { verse: "on" }, vi.token)).body.prefs.verse, "on");
 });
+
+test("guide: Insights counts which looks members chose and how often each switch moved, with no names", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken(), fay = await s.signup("Fay Free"), gus = await s.signup("Gus Green"); await s.signup("Hal Hill");
+  const u = "/api/me/prefs";
+  await s.call("PUT", u, { view: "simple" }, fay.token); await s.call("PUT", u, { view: "simple" }, gus.token);
+  await s.call("PUT", u, { theme: "black" }, fay.token); await s.call("PUT", u, { theme: "white" }, fay.token);
+  await s.call("PUT", u, { view: "simple" }, fay.token); // no change: not a move
+  const r = await s.call("GET", "/api/admin/analytics/looks", undefined, A);
+  assert.equal(r.status, 200); assert.equal(r.body.members, 3);
+  assert.equal(r.body.looks[0].key, "view", "the most changed switch comes first");
+  assert.deepEqual(r.body.looks[0].counts, { full: 1, simple: 2 }); assert.equal(r.body.looks[0].changed, 2); assert.equal(r.body.looks[0].moves, 2);
+  const theme = r.body.looks.find((l) => l.key === "theme");
+  assert.deepEqual(theme.counts, { white: 3, black: 0 }); assert.equal(theme.moves, 2);
+  assert.ok(!/Fay|Gus|Hal|example\.com/.test(JSON.stringify(r.body)), "counts only");
+  assert.equal((await s.call("GET", "/api/admin/analytics/looks", undefined, fay.token)).status, 401);
+});
