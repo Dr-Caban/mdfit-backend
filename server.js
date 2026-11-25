@@ -1787,6 +1787,7 @@ if (require.main === module) {
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
   setInterval(() => app.get("nudge")(), 60 * 1000).unref();        // achievements, streak nudge and class reminders
+  setInterval(() => { try { app.get("birthdays")(); } catch (err) { logger.warn("birthday_greeting_failed", { error: err.message }); } }, 60 * 1000).unref(); // happy birthday, once a year
   setInterval(() => app.get("guideRemind")(), 60 * 1000).unref();  // reminders a member asked the guide to save
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
