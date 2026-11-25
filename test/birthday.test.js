@@ -21,7 +21,7 @@ test("birthday: optional at sign-up, checked when given, and greeted once on the
   const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date(clock.now), calWatchMs: 0, siteUrl: "https://mdfit.example.com",
     resendKey: "test-key", notifyFrom: "MD Fit <hello@example.com>", resendUrl: `http://127.0.0.1:${mailer.address().port}`, notifyGapMs: 0 });
   const server = app.listen(0); await new Promise((r) => server.once("listening", r));
-  t.after(() => { server.close(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  t.after(() => { server.closeAllConnections(); server.close(); mailer.closeAllConnections(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const signup = async (name, dob) => { const r = await fetch(base + "/api/clients/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, email: name.toLowerCase().replace(/\W+/g, ".") + "@example.com", password: "made-up-pass-1", ...(dob === undefined ? {} : { dob }) }) }); return { status: r.status, body: await r.json() }; };
   const stored = () => JSON.parse(fs.readFileSync(path.join(dataDir, "clients.json"), "utf8"));
@@ -47,6 +47,7 @@ test("birthday: optional at sign-up, checked when given, and greeted once on the
   assert.ok(!/1990|36|years/.test(m.text || ""), "no age, no year");
   assert.equal(run(), 0, "once a year");
   clock.now = new Date("2027-11-25T15:00:00Z"); assert.equal(run(), 1, "and again next year");
+  await wait(() => greetings().length === 2); // let the second email leave before the stand-in mail server closes
   // A date that came in with imported records (no dobBy) is never greeted
   const l = stored(); const nia = l.find((c) => c.name === "Nia None"); nia.dob = "1970-11-26"; fs.writeFileSync(path.join(dataDir, "clients.json"), JSON.stringify(l));
   clock.now = new Date("2027-11-26T15:00:00Z"); assert.equal(run(), 0);
