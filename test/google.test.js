@@ -24,6 +24,7 @@ function fakeGoogle() {
       const send = (code, data) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(data)); };
       if (state.down) return send(503, { error: { message: "unavailable" } });
       if (state.newDisabled && req.url.startsWith("/v1/")) return send(403, { error: { message: "Places API (New) has not been used in project 123 before or it is disabled." } });
+      if (state.newDenied && req.url.startsWith("/v1/")) return send(403, { error: { message: "Permission denied on the service." } });
       const u = new URL(req.url, "http://x");
       if (u.pathname.startsWith("/legacy/")) {
         if (u.searchParams.get("key") !== KEY) return send(200, { status: "REQUEST_DENIED", error_message: "The provided API key is invalid." });
@@ -147,4 +148,14 @@ test("falls back to the legacy Places API when Places API (New) isn't enabled fo
   const newCalls = g.calls.filter((c) => c.url.startsWith("/v1/")).length;
   await s.call("POST", "/api/admin/reviews/refresh");
   assert.equal(g.calls.filter((c) => c.url.startsWith("/v1/")).length, newCalls, "stays on legacy once detected");
+});
+
+test("falls back to the legacy Places API when Places API (New) answers \"Permission denied on the service\"", async (t) => {
+  const g = fakeGoogle(); g.state.newDenied = true; t.after(() => g.server.close());
+  const s = await start({ googleKey: KEY, googleUrl: g.url(), googleLegacyUrl: g.legacy() }); t.after(s.close);
+  const r = (await s.call("GET", "/api/reviews")).body;
+  assert.equal(r.source, "google");
+  assert.equal(r.rating, 4.8);
+  await s.login();
+  assert.equal((await s.call("POST", "/api/admin/reviews/refresh")).body.api, "legacy");
 });
