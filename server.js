@@ -207,7 +207,7 @@ function createApp(cfg = loadConfig()) {
   async function googleReviews({ fresh = false } = {}) {
     if (!places.enabled) return null;
     const age = Date.now() - reviewsMem.at;
-    if (!fresh && reviewsMem.at && age < (reviewsMem.data ? REVIEWS_CACHE_MS : REVIEWS_RETRY_MS)) return reviewsMem.data || store.read("googleReviews", null);
+    if (!fresh && reviewsMem.at && age < (reviewsMem.data ? REVIEWS_CACHE_MS : reviewsMem.retryMs || REVIEWS_RETRY_MS)) return reviewsMem.data || store.read("googleReviews", null);
     if (reviewsInflight) return reviewsInflight;
     reviewsInflight = (async () => {
       try {
@@ -223,8 +223,11 @@ function createApp(cfg = loadConfig()) {
         reviewsMem = { at: Date.now(), data, error: "" };
         return data;
       } catch (err) {
-        logger.warn("google_reviews_failed", { error: err.message });
-        reviewsMem = { at: Date.now(), data: null, error: err.message };
+        // Google refusing the key or the project (a 4xx, or REQUEST_DENIED) is a setting to fix in Google Cloud, not a
+        // blip: asking again every ten minutes cannot help, so it is asked, and logged, every six hours until it is fixed.
+        const refused = (Number(err.status) >= 400 && Number(err.status) < 500) || /DENIED|INVALID/.test(String(err.status));
+        logger.warn("google_reviews_failed", { error: err.message, ...(refused ? { nextTryHours: 6 } : {}) });
+        reviewsMem = { at: Date.now(), data: null, error: err.message, retryMs: refused ? REVIEWS_CACHE_MS : REVIEWS_RETRY_MS };
         if (fresh) throw err;
         return store.read("googleReviews", null);
       } finally { reviewsInflight = null; }

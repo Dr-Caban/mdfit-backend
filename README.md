@@ -31,5 +31,13 @@ Also locked: the tests that prove these (`test/compliance.test.js`, `test/hipaa.
 `test/audit*.test.js`, `test/client-trash.test.js`, `test/partner-share.test.js`). Never delete, skip or loosen one to
 get a change through.
 
+## Every change is monitored
+
+Owner's rule (Nov 2026): after any change to the EMR or API goes live, it is reviewed every 6 hours until 72 hours pass
+with no failure and no further change, then once every 24 hours; a failure or a new change starts that again. The
+scheduled task "MD Fit endpoint failure review" does this. The protocol, what counts as a failure, and the task's
+prompt are in `docs/MONITORING.md` in `mdfit-frontend`. A session that ships a change confirms the task exists and is
+enabled before it finishes, and never pauses, loosens or deletes it unless the owner asks.
+
 If a change to a locked part is asked for: say which safeguard it affects and which rule it serves, make the smallest
 change, run `node --test`, and re-check the checklist afterwards. Never print, copy or log a key or any patient data.
