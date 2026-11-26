@@ -45,7 +45,7 @@ test("guide: a free account gets 50,000 tokens a day by default; an answer on th
 
   let g = (await s.call("GET", "/api/me/guide", undefined, fay.token)).body;
   assert.deepEqual({ plan: g.plan, unit: g.unit, limit: g.limit, used: g.used, left: g.left }, { plan: "free", unit: "tokens", limit: 50000, used: 0, left: 50000 }, "the default is 50,000 tokens");
-  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" });
+  assert.deepEqual(g.reminders, []); assert.deepEqual(g.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "off" });
   assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, A)).body.settings.freeTokensPerDay, 50000);
   assert.deepEqual((await s.answer(fay.token)).body, { ok: true, unit: "tokens", used: 300, limit: 50000, left: 49700 });
 
@@ -180,11 +180,11 @@ test("guide: looks are checked and kept on the account", async (t) => {
   const s = await start(); t.after(s.close);
   const fay = await s.signup("Fay Free"), u = "/api/me/prefs";
   for (const bad of [{ theme: "purple" }, { layout: "huge" }, { theme: "black", layout: 3 }, { theme: null }]) assert.equal((await s.call("PUT", u, bad, fay.token)).status, 400, JSON.stringify(bad));
-  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" } });
-  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all", view: "full", verse: "on" } });
-  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "on" } });
+  assert.deepEqual((await s.call("PUT", u, {}, fay.token)).body, { prefs: { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "off" } });
+  assert.deepEqual((await s.call("PUT", u, { theme: "black" }, fay.token)).body, { prefs: { theme: "black", layout: "comfortable", nudges: "all", view: "full", verse: "off" } });
+  assert.deepEqual((await s.call("PUT", u, { layout: "compact" }, fay.token)).body, { prefs: { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "off" } });
   const again = (await s.call("POST", "/api/clients/login", { email: "fay.free@example.com", password: "made-up-pass-1" })).body;
-  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "on" }, "the same on another device");
+  assert.deepEqual((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs, { theme: "black", layout: "compact", nudges: "all", view: "full", verse: "off" }, "the same on another device");
   assert.deepEqual((await s.call("PUT", u, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" }, fay.token)).body.prefs, { theme: "white", layout: "comfortable", nudges: "all", view: "full", verse: "on" });
   // Reminders from Solomon: all (default), the evening streak one only, or off
   assert.equal((await s.call("PUT", u, { nudges: "streaks" }, fay.token)).body.prefs.nudges, "streaks");
@@ -371,15 +371,44 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   assert.equal(thirteenth.status, 429); assert.equal(m.seen.length, 4);
 });
 
-test("guide: the daily Bible verse is on by default, can be turned off, and anything else is refused", async (t) => {
+test("guide: the daily Bible verse is off until the member says yes; Solomon's question is asked once per account", async (t) => {
   const s = await start(); t.after(s.close);
   const vi = await s.signup("Vi Verse"), u = "/api/me/prefs";
-  assert.equal((await s.call("GET", "/api/me/guide", undefined, vi.token)).body.prefs.verse, "on");
-  assert.equal((await s.call("PUT", u, { verse: "off" }, vi.token)).body.prefs.verse, "off");
+  let g = (await s.call("GET", "/api/me/guide", undefined, vi.token)).body;
+  assert.equal(g.prefs.verse, "off"); assert.equal(g.verseAsked, false, "not asked yet");
+  assert.equal((await s.call("PUT", u, { theme: "black" }, vi.token)).body.prefs.verse, "off");
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, vi.token)).body.verseAsked, false, "another look is not an answer");
+  assert.equal((await s.call("PUT", u, { verse: "on" }, vi.token)).body.prefs.verse, "on");
   const again = (await s.call("POST", "/api/clients/login", { email: "vi.verse@example.com", password: "made-up-pass-1" })).body;
-  assert.equal((await s.call("GET", "/api/me/guide", undefined, again.token)).body.prefs.verse, "off", "the same on another device");
+  g = (await s.call("GET", "/api/me/guide", undefined, again.token)).body;
+  assert.equal(g.prefs.verse, "on", "the same on another device"); assert.equal(g.verseAsked, true);
+  assert.equal((await s.call("PUT", u, { theme: "white" }, vi.token)).body.prefs.verse, "on", "other looks leave it alone");
   const bad = await s.call("PUT", u, { verse: "sometimes" }, vi.token);
   assert.equal(bad.status, 400); assert.equal(bad.body.error, "Daily Bible verse is on or off.");
-  assert.equal((await s.call("PUT", u, { theme: "black" }, vi.token)).body.prefs.verse, "off", "other looks leave it alone");
-  assert.equal((await s.call("PUT", u, { verse: "on" }, vi.token)).body.prefs.verse, "on");
+  // "No thanks" is an answer too
+  const no = await s.signup("Ned No");
+  assert.equal((await s.call("PUT", u, { verse: "off" }, no.token)).body.prefs.verse, "off");
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, no.token)).body.verseAsked, true);
+  // An account that held "on" from before the question existed (it was the default) is off and gets asked
+  const f = path.join(s.dataDir, "clients.json"), l = JSON.parse(fs.readFileSync(f, "utf8"));
+  l.find((c) => c.email === "ned.no@example.com").appPrefs = { theme: "white", verse: "on" }; fs.writeFileSync(f, JSON.stringify(l));
+  g = (await s.call("GET", "/api/me/guide", undefined, no.token)).body;
+  assert.equal(g.prefs.verse, "off"); assert.equal(g.verseAsked, false);
+});
+
+test("guide: Insights counts which looks members chose and how often each switch moved, with no names", async (t) => {
+  const s = await start(); t.after(s.close);
+  const A = await s.adminToken(), fay = await s.signup("Fay Free"), gus = await s.signup("Gus Green"); await s.signup("Hal Hill");
+  const u = "/api/me/prefs";
+  await s.call("PUT", u, { view: "simple" }, fay.token); await s.call("PUT", u, { view: "simple" }, gus.token);
+  await s.call("PUT", u, { theme: "black" }, fay.token); await s.call("PUT", u, { theme: "white" }, fay.token);
+  await s.call("PUT", u, { view: "simple" }, fay.token); // no change: not a move
+  const r = await s.call("GET", "/api/admin/analytics/looks", undefined, A);
+  assert.equal(r.status, 200); assert.equal(r.body.members, 3);
+  assert.equal(r.body.looks[0].key, "view", "the most changed switch comes first");
+  assert.deepEqual(r.body.looks[0].counts, { full: 1, simple: 2 }); assert.equal(r.body.looks[0].changed, 2); assert.equal(r.body.looks[0].moves, 2);
+  const theme = r.body.looks.find((l) => l.key === "theme");
+  assert.deepEqual(theme.counts, { white: 3, black: 0 }); assert.equal(theme.moves, 2);
+  assert.ok(!/Fay|Gus|Hal|example\.com/.test(JSON.stringify(r.body)), "counts only");
+  assert.equal((await s.call("GET", "/api/admin/analytics/looks", undefined, fay.token)).status, 401);
 });

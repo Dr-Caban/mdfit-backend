@@ -1757,6 +1757,8 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership, activePlan: cl.activePlan, isInpatient: cl.isInpatient, fullAccess: cl.fullAccess });
 
+  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today }); // Insights: what members do inside the app (counts only)
+
   mountStaff({ admin, staff, activity }); // /api/admin/staff: the owner (and anyone with "staff") manages accounts
 
   app.use("/api/admin", admin);
@@ -1788,6 +1790,7 @@ if (require.main === module) {
   if (cfg.calWatchMs > 0) { const tick = () => app.get("watchCalendar")(); setTimeout(tick, 5000).unref(); setInterval(tick, cfg.calWatchMs).unref(); }
   setInterval(() => app.get("remindVisits")(), 60 * 1000).unref(); // appointment reminders to the app, checked every minute
   setInterval(() => app.get("nudge")(), 60 * 1000).unref();        // achievements, streak nudge and class reminders
+  setInterval(() => { try { app.get("birthdays")(); } catch (err) { logger.warn("birthday_greeting_failed", { error: err.message }); } }, 60 * 1000).unref(); // happy birthday, once a year
   setInterval(() => app.get("guideRemind")(), 60 * 1000).unref();  // reminders a member asked the guide to save
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
