@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
-const { createGuideAI, hostAllowed, read } = require("../lib/guide-ai");
+const { createGuideAI, hostAllowed, read, system } = require("../lib/guide-ai");
 
 if (process.env.NODE_ENV === "production") throw new Error("Refusing to run tests in production.");
 const PLACES = [{ id: "pain", label: "Pain tool" }, { id: "book", label: "Schedule an appointment" }, { id: "programs", label: "Programs" }, { id: "premium", label: "Membership" }];
@@ -18,7 +18,7 @@ async function model(reply) {
 const quiet = { warn() {} };
 // The parts of an answer most tests look at (suggestions and tokens have their own tests below)
 const core = (o) => (o && o.say ? { say: o.say, places: o.places, area: o.area, model: o.model } : o);
-const NONE = { programs: [], guides: [], videos: [], tip: "" };
+const NONE = { programs: [], guides: [], videos: [], tip: "", mood: "", verse: false };
 
 test("guide AI: only a service that signs a business associate agreement is ever used", () => {
   assert.equal(hostAllowed("api.openai.com"), true);
@@ -117,5 +117,16 @@ test("guide AI: suggestions are read strictly too: catalog ids only, three progr
   const got = read(JSON.stringify({ say: "Ok.", places: ["pain"], area: "", programs: ["p1", "x", "p1", "p2", "p3", "p4"], videos: ["v5", "v1", "zz", "v2", "v3", "v4"], tip: "**Drink** water  through the day." + " more".repeat(100) }), ["pain"], cat);
   assert.deepEqual(got.programs, ["p1", "p2", "p3"]); assert.deepEqual(got.videos, ["v5", "v1", "v2", "v3"]);
   assert.match(got.tip, /^Drink water through the day\. more/); assert.ok(got.tip.length <= 300);
-  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "" });
+  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "", mood: "", verse: false });
+});
+
+test("guide AI: his mood and the verse flag are read strictly", () => {
+  const cat = { programs: [], videos: [], guides: [] };
+  const a = read(JSON.stringify({ say: "Gladly. Here is one to carry today.", mood: "Peace", verse: true }), [], cat);
+  assert.equal(a.mood, "peace"); assert.equal(a.verse, true);
+  const b = read(JSON.stringify({ say: "Ok.", mood: "furious", verse: "yes" }), [], cat);
+  assert.equal(b.mood, "", "only the faces he has"); assert.equal(b.verse, false, "only a real true");
+  const sys = system([{ id: "pain", label: "Open the pain tool" }]);
+  assert.match(sys, /Conversation is part of your job/); assert.match(sys, /never quote or paraphrase scripture yourself/);
+  assert.match(sys, /never diagnose/, "the clinical rules are unchanged");
 });
