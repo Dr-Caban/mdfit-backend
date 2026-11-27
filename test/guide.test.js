@@ -327,7 +327,7 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   assert.equal(m.seen.length, 0);
   const ok = await ask(`Hi I'm Zed Quillon, zed.quillon@example.com. ${MARK} my knee hurts`);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", mood: "", verse: false, suggested: { programs: [], videos: [], guides: [], tip: "" },
+  assert.deepEqual(ok.body, { ok: true, say: `I understand, that can be frustrating. ${SAID}`, places: ["pain", "book"], area: "knee", mood: "", verse: false, outside: false, suggested: { programs: [], videos: [], guides: [], tip: "" },
     tokens: 1000, unit: "tokens", used: 1000, limit: 50000, left: 49000 }, "the tokens the service says it used");
   assert.equal(m.seen.length, 1); const sent = JSON.stringify(m.seen[0].body);
   assert.equal(/Zed|Quillon|zed\.quillon/.test(sent), false, "the member's name and email did not leave"); assert.match(sent, /my knee hurts/);
@@ -344,11 +344,14 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   assert.equal((await s.call("GET", "/api/me/guide", undefined, mel.token)).body.left, null);
 
   // the service fails, or answers nonsense: the app falls back to the device. A refusal costs nothing; a reply the
-  // model did write, but that could not be read, is counted at what was held for it (the last answer's cost)
-  assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
+  // model did write, but that could not be read, is counted at what was held for it (the last answer's cost).
+  // The reply says AI answers are still on and this one failed: { ai: false } is kept for the owner's switch being
+  // off, which the app takes as "stop asking for the rest of this chat".
+  assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: true, failed: true });
   assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 1000);
-  assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: false });
+  assert.deepEqual((await ask(`${MARK} where are the programs`)).body, { ok: false, ai: true, failed: true });
   assert.equal(m.seen.length, 4); assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, 2000);
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, true, "a failed answer does not switch AI answers off");
 
   // at the limit the model is not called, and the hit is recorded like any other
   await s.call("PUT", "/api/admin/guide/settings", { freeTokensPerDay: 1000 }, A);
@@ -369,6 +372,100 @@ test("guide AI answers: the sentence goes without the member's name, the tokens 
   // and one account cannot fire dozens a minute at it: Zed has sent twelve in this minute (the refused ones count too)
   const thirteenth = await ask("where are the programs");
   assert.equal(thirteenth.status, 429); assert.equal(m.seen.length, 4);
+});
+
+test("guide AI answers: only the practice owner switches them on; staff with Content can still switch them off and set the allowance", async (t) => {
+  const m = await model(() => ({ content: '{"say":"Here you go.","places":["programs"],"area":""}' })); t.after(m.close);
+  const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
+  const A = await s.adminToken(), zed = await s.signup("Zed Quillon"), u = "/api/admin/guide/settings";
+  const staff = async (on, owner, role) => { const email = `${role}@example.com`, made = await on.call("POST", "/api/admin/staff", { name: `${role} person`, email, role, password: "staff-pass-1234" }, owner); assert.equal(made.status, 201, JSON.stringify(made.body)); return (await on.call("POST", "/api/admin/login", { email, password: "staff-pass-1234" })).body.token; };
+  const REFUSED = { error: "Only the practice owner can do that.", need: "owner" };
+  // every role that is given Content: Developer and Manager (kept away from patient data), Clinician, Administrator
+  const who = {}; for (const role of ["developer", "manager", "clinician", "admin"]) who[role] = await staff(s, A, role);
+  for (const [role, tok] of Object.entries(who)) {
+    assert.equal((await s.call("GET", "/api/admin/guide/stats", undefined, tok)).status, 200, `${role} holds Content`);
+    const on = await s.call("PUT", u, { ai: true }, tok);
+    assert.equal(on.status, 403, role); assert.deepEqual(on.body, REFUSED, role);
+    const both = await s.call("PUT", u, { ai: true, freeTokensPerDay: 9000 }, tok); // refused whole: the allowance is not saved either
+    assert.equal(both.status, 403, role); assert.deepEqual(both.body, REFUSED, role);
+  }
+  assert.equal(fs.existsSync(path.join(s.dataDir, "guide.json")), false, "nothing was written");
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, false);
+  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "where are programs" }, zed.token)).body, { ok: false, ai: false });
+  assert.equal(m.seen.length, 0, "what the member typed went nowhere");
+
+  // what stays with Content: the free allowance, and switching off (off while it is off changes nothing)
+  assert.equal((await s.call("PUT", u, { freeTokensPerDay: 9000 }, who.developer)).body.settings.freeTokensPerDay, 9000);
+  assert.equal((await s.call("PUT", u, { ai: false }, who.manager)).status, 200);
+  // the owner switches it on
+  assert.equal((await s.call("PUT", u, { ai: true }, A)).body.settings.ai, true);
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, true);
+  // "on" sent again while it is on is not a switch, so it is let through, with the allowance beside it
+  const again = await s.call("PUT", u, { ai: true, freeTokensPerDay: 8000 }, who.developer);
+  assert.equal(again.status, 200); assert.deepEqual([again.body.settings.ai, again.body.settings.freeTokensPerDay], [true, 8000]);
+  // staff can switch it off, and cannot switch it back on
+  assert.equal((await s.call("PUT", u, { ai: false }, who.manager)).body.settings.ai, false);
+  for (const tok of [who.manager, who.admin]) { const back = await s.call("PUT", u, { ai: true }, tok); assert.equal(back.status, 403); assert.deepEqual(back.body, REFUSED); }
+  assert.deepEqual(s.file("guide").settings, { freeTokensPerDay: 8000, ai: false });
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, false);
+  // the ledger has the two real switches and who made each; a refused attempt is not one
+  const log = (await s.call("GET", "/api/admin/audit?action=guide.ai", undefined, A)).body, rows = (log.entries || log.events || log.rows || log).filter((e) => e.action === "guide.ai");
+  assert.deepEqual(rows.map((e) => [e.actor, e.meta.on]).sort((a, b) => Number(a[1]) - Number(b[1])), [["admin:manager@example.com", false], ["admin:coach@example.com", true]]);
+
+  // with no AI service connected a staff account is told it is the owner's switch (403); the owner is told why it cannot be on yet (400)
+  const bare = await start(); t.after(bare.close);
+  const A0 = await bare.adminToken(), dev0 = await staff(bare, A0, "developer");
+  const r0 = await bare.call("PUT", u, { ai: true }, dev0);
+  assert.equal(r0.status, 403); assert.deepEqual(r0.body, REFUSED);
+  const o0 = await bare.call("PUT", u, { ai: true }, A0);
+  assert.equal(o0.status, 400); assert.match(o0.body.error, /No AI service is connected/);
+});
+
+test("guide AI answers: the model's own word that a message is outside Solomon's subject is passed on; a failed answer says so and leaves AI answers on", async (t) => {
+  const said = ['{"say":"Not my lane, but I can find you a program.","places":["programs"],"area":"","outside":true}', '{"say":"Programs are here.","places":["programs"],"area":"","outside":"yes"}', '{"say":"Programs are here.","places":["programs"],"area":""}'];
+  const m = await model((n) => (n === 4 ? { status: 500 } : { content: said[n - 1] || said[2] })); t.after(m.close);
+  const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
+  const A = await s.adminToken(), zed = await s.signup("Zed Quillon"), ask = (text) => s.call("POST", "/api/me/guide/ask", { text }, zed.token);
+  await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);
+  const off = (await ask("what is the weather like in Paris this week")).body;
+  assert.equal(off.ok, true); assert.equal(off.outside, true); assert.equal(off.say, "Not my lane, but I can find you a program.");
+  assert.match(m.seen[0].body.messages[0].content, /"outside": boolean/, "the model is asked for it");
+  assert.equal((await ask("where are the programs")).body.outside, false, "only a real true counts");
+  assert.equal((await ask("where are the programs")).body.outside, false, "left out is false");
+  // the model fails once: the reply is not the owner's "off", the setting is untouched, and the next question is asked as usual
+  assert.deepEqual((await ask("where are the programs")).body, { ok: false, ai: true, failed: true });
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.ai, true);
+  assert.equal(s.file("guide").settings.ai, true);
+  const next = (await ask("where are the programs")).body;
+  assert.equal(next.ok, true); assert.equal(m.seen.length, 5);
+  // the owner's switch being off is still told apart from that
+  await s.call("PUT", "/api/admin/guide/settings", { ai: false }, A);
+  assert.deepEqual((await ask("where are the programs")).body, { ok: false, ai: false }); assert.equal(m.seen.length, 5);
+});
+
+test("guide AI answers: crisis words are answered in the app, never sent to the model and never counted; figures of speech go through", async (t) => {
+  const m = await model(() => ({ content: '{"say":"Sorry it hurts. Start with the pain tool.","places":["pain","book"],"area":"back"}' })); t.after(m.close);
+  const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
+  const A = await s.adminToken(), MARK = "ZZMARKER";
+  await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);
+  const CRISIS = ["god I want to die", "i wanna die", "I give up, I want to end it all", "I want to end my life", "everyone would be better off dead", "I don't want to live", "I don’t want to be here anymore",
+    "i dont want to be alive", "I want to hurt myself", "I might harm myself", "I am going to kill myself", "I feel suicidal", "I think I overdosed", "I am struggling to breathe", "it is hard to breathe",
+    "trouble breathing since last night", "difficulty breathing", "I can’t breathe", "I am having chest pains"];
+  // one account may ask twelve times a minute, so a new made-up member takes over every ten
+  const people = [];
+  for (const [i, text] of CRISIS.entries()) {
+    if (i % 10 === 0) people.push(await s.signup("Uma Urgent " + "ab"[i / 10]));
+    assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: `${MARK} ${text}` }, people[people.length - 1].token)).body, { ok: true, urgent: true }, text);
+  }
+  assert.equal(m.seen.length, 0, "not one of them was sent to the model");
+  for (const p of people) assert.equal((await s.call("GET", "/api/me/guide", undefined, p.token)).body.used, 0, "and none was counted");
+  assert.equal(s.everything().includes(MARK), false, "nothing typed was kept");
+  // close to those words, but a figure of speech or an ordinary sentence: read by the model like anything else
+  const fig = await s.signup("Fig Speech"), FIGURES = ["my back is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight", "breathing exercises for stress"];
+  for (const [i, text] of FIGURES.entries()) {
+    const r = (await s.call("POST", "/api/me/guide/ask", { text }, fig.token)).body;
+    assert.equal(r.ok, true, text); assert.equal(r.urgent, undefined, text); assert.equal(r.say, "Sorry it hurts. Start with the pain tool.", text); assert.equal(m.seen.length, i + 1, text);
+  }
 });
 
 test("guide: the daily Bible verse is off until the member says yes; Solomon's question is asked once per account", async (t) => {
