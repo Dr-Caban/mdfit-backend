@@ -606,7 +606,10 @@ test("9. the member's calendar and its feed put a payment on the clinic's day, e
     assert.deepEqual(await on("2026-12-01"), ["Membership renews|Billed to the card on file"], "on the evening it is charged");
     assert.deepEqual(await on("2026-12-02"), []);
   });
-  await t.test("the calendar feed", async () => {
+  await t.test("the calendar feed", async (t) => {
+    // The feed carries the last 90 days counted from the real clock, so it is read as on the day this test is set on
+    // (19 November 2026, the "today" given to payments above). Only the date is pinned; timers run as usual.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-19T15:00:00Z") });
     const ics = await cal.feed(client);
     assert.match(ics, /DTSTART;VALUE=DATE:20261118\r\nDTEND;VALUE=DATE:20261119\r\nSUMMARY:MD Fit invoice 1001/);
     assert.equal(/DTSTART;VALUE=DATE:20261119/.test(ics), false, "nothing on the 19th");

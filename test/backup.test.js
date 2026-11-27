@@ -101,6 +101,9 @@ test("weekly export: sent to the owner alone, encrypted, with every client insid
   const f = await fakeResend(); t.after(f.close);
   const { call, adm, dataDir } = await boot(t, f);
   for (let i = 0; i < 3; i++) assert.equal((await signup(call, i)).status, 201);
+  // one of them has a pain track prescribed from the chart, with a note: the weekly file has to carry that too
+  const zelda1 = (await call("POST", "/api/clients/login", { email: "zelda1@example.com", password: "pass-pass-123" })).body.client;
+  assert.equal((await call("PUT", `/api/admin/clients/${zelda1.id}/pain-plan`, { items: [{ kind: "track", id: "scalenes", note: "Twice a day" }] }, adm)).status, 200);
   const st0 = (await call("GET", "/api/admin/export/weekly", undefined, adm)).body;
   assert.equal(st0.ready, true); assert.equal(st0.last, null);
 
@@ -122,6 +125,8 @@ test("weekly export: sent to the owner alone, encrypted, with every client insid
   const rec = JSON.parse(files["client-records.json"].toString("utf8"));
   assert.equal(rec.count, 3); assert.deepEqual(rec.clients.map((c) => c.email).sort(), ["zelda0@example.com", "zelda1@example.com", "zelda2@example.com"]);
   assert.equal(files["clients.csv"].toString("utf8").trim().split(/\r?\n/).length, 4, "a header and three rows");
+  assert.deepEqual(rec.clients.find((c) => c.email === "zelda1@example.com").assignedPain.map((x) => [x.kind, x.id, x.note, typeof x.assignedAt]), [["track", "scalenes", "Twice a day", "string"]], "what was prescribed from the chart is in the weekly file");
+  assert.deepEqual(rec.clients.find((c) => c.email === "zelda0@example.com").assignedPain, []);
   // nothing that works as a key comes along
   assert.ok(!/passwordHash|"pwv"|resetToken|"token"/.test(files["client-records.json"].toString("utf8")));
 
