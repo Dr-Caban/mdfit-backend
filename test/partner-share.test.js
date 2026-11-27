@@ -210,3 +210,18 @@ test("PATF partners: the manager registers a partner (Section 7.2), its code cre
   assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "owner-pass-123", ratePct: 16 }, s.owner)).status, 400);
   assert.equal((await s.call("PUT", "/api/admin/affiliates/settings", { password: "owner-pass-123", ratePct: 15 }, s.owner)).status, 200);
 });
+
+test("statements: a share counts in the month of its payment, a clawback in the month it was taken back, never in both", async (t) => {
+  const s = await start(t);
+  const mgr = await s.staffLogin({ name: "Josh Lerner", email: "josh@example.com", role: "manager" });
+  // A November membership payment whose 15% share was paid out, refunded in full in December
+  s.writeJson("revenue", [{ id: "r_nov", ts: "2026-11-10T15:00:00.000Z", source: "invoice", ref: "in_nov", kind: "membership", product: "Membership", category: "online", grossCents: 1995, taxCents: 0, feeCents: 88, refundedCents: 1995, paymentIntent: "pi_nov" }]);
+  s.writeJson("partner-share-ledger", [
+    { id: "s_nov", kind: "share", revenueId: "r_nov", ts: "2026-11-10T15:00:00.000Z", product: "Membership", pct: 15, cents: 286, status: "paid", paidAt: "2026-11-20T15:00:00.000Z" },
+    { id: "c_dec", kind: "clawback", revenueId: "r_nov", ts: "2026-12-03T15:00:00.000Z", product: "Membership", pct: 15, cents: -286, status: "ready", paidAt: null }]);
+  const month = async (m) => (await s.call("GET", `/api/admin/partner/statement?month=${m}`, undefined, mgr.token)).body.share;
+  const nov = await month("2026-11"), dec = await month("2026-12");
+  assert.equal(nov.earnedCents, 286, "November: the share earned on November's payment");
+  assert.equal(dec.earnedCents, -286, "December: the clawback, once");
+  assert.equal(nov.earnedCents + dec.earnedCents, 0, "over both months the refunded payment earns nothing");
+});
