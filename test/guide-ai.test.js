@@ -140,13 +140,13 @@ const CRISIS = [
   "having a hard time breathing", "I am struggling to breathe", "it is hard to breathe", "trouble breathing since last night", "difficulty breathing", "I can't breathe", "I can’t breathe", "I cannot breathe",
   // whole words, not only the stem: these were missed while the list ended every entry at a word boundary
   "I feel suicidal", "thinking about suicide", "I think I overdosed", "it was an overdose", "I am having chest pains",
-  "call 911", "this is an emergency", "chest pain", "I think it is a heart attack", "I have had two heart attacks", "sudden numbness in my face", "numb in my arm", "signs of a stroke", "I passed out", "she fainted", "severe bleeding"
+  "call 911", "this is an emergency", "chest pain", "I think it is a heart attack", "I think I'm having a heart attack", "sudden numbness in my face", "numb in my arm", "signs of a stroke", "I passed out", "she fainted", "severe bleeding"
 ];
 // Figures of speech and ordinary sentences that sit close to those words
 const NOT_CRISIS = ["my back is killing me", "oh god my stomach is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight",
   "breathing exercises for stress", "it is hard to stretch my hip", "I have trouble sleeping", "I want to live healthier", "my knee hurts", "where are the programs",
   // an injury, said the way people in rehab say it: pain help, not the 911 answer
-  "I hurt myself lifting yesterday", "I might hurt myself doing that", "I keep hurting myself in the gym"];
+  "I hurt myself lifting yesterday", "I keep hurting myself in the gym"];
 // (test/crisis-words.test.js has the full lists, and the sentences the words cannot tell from a crisis, which count)
 
 test("guide AI: every crisis phrase is caught and never sent, with the apostrophe a phone types too; figures of speech are not crisis words", async (t) => {

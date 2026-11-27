@@ -321,6 +321,18 @@ test("calendar: a time added in Google after the last good read is refused the m
   assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), ["google 2026-11-17T14:00"], "the booking check reads Google fresh");
 });
 
+test("calendar: one calendar reporting its own error: nothing is kept, a time taken there is refused once it answers, and the log line is written once a minute", async () => {
+  const g = standIn(), cs = g.make({ calendarId: "dr@example.com, second@example.com" });
+  assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), ["google-2 2026-11-17T19:00"]); cs.clear();
+  g.state.google = "second-refused";
+  const lines = await logged(async () => { for (let i = 0; i < 4; i++) { await cs.busy("2026-11-17", "2026-11-17"); g.clock.t += 5e3; } });
+  assert.equal(lines.filter((l) => l.msg === "gcal_busy_partial").length, 1, "logged once in the minute");
+  assert.match(cs.status().lastError, /calendar 2: backendError/, "staff see it on every call");
+  // a time is taken on the second calendar meanwhile; it answers again: the very next check sees it
+  g.state.google = "up"; g.state.busy["second@example.com"].push({ start: "2026-11-17T15:00:00Z", end: "2026-11-17T16:00:00Z" });
+  assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")).sort(), ["google-2 2026-11-17T15:00", "google-2 2026-11-17T19:00"]);
+});
+
 test("calendar: each source falls back on its own (one Google calendar of two, the SimplePractice feed)", async () => {
   const g = standIn(), cs = g.make({ calendarId: "dr@example.com, second@example.com", icsUrl: "https://sp.example/feed.ics" });
   const all = ["google 2026-11-16T15:00", "google-2 2026-11-17T19:00", "simplepractice 2026-11-18T14:00"];
@@ -331,13 +343,11 @@ test("calendar: each source falls back on its own (one Google calendar of two, t
   let r = await cs.busy("2026-11-12", "2026-11-30");
   assert.deepEqual(times(r), ["google 2026-11-16T15:00", "google 2026-11-19T15:00", "google-2 2026-11-17T19:00", "simplepractice 2026-11-18T14:00"]);
   assert.match(cs.status().lastError, /calendar 2: backendError/);
-  // a calendar reporting its own error (not shared yet) is a setting, not an outage: the answer is kept as usual, so
-  // Google is not asked, and the error not logged, on every page view
   const asked = g.state.asked;
-  assert.deepEqual(times(await cs.busy("2026-11-12", "2026-11-30")), times(r));
-  assert.equal(g.state.asked, asked, "kept for the usual three minutes");
+  await cs.busy("2026-11-12", "2026-11-30");
+  assert.equal(g.state.asked, asked + 1, "an answer with a failure in it is not kept");
   // the feed fails: its last good times stay, Google is fresh
-  cs.clear(); g.state.google = "up"; g.state.feed = "down";
+  g.state.google = "up"; g.state.feed = "down";
   r = await cs.busy("2026-11-12", "2026-11-30");
   assert.deepEqual(times(r), ["google 2026-11-16T15:00", "google 2026-11-19T15:00", "google-2 2026-11-17T19:00", "simplepractice 2026-11-18T14:00"]);
   assert.match(cs.status().lastError, /SimplePractice feed: HTTP 503/);
