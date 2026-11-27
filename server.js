@@ -182,7 +182,7 @@ function createApp(cfg = loadConfig()) {
   const activityLog = createActivityLog({ dir: path.join(cfg.dataDir, "logs"), key: cfg.dataKey || cfg.sessionSecret,
     keepDays: Math.max(7, Math.min(365, Number(process.env.LOG_KEEP_DAYS) || 90)), now: cfg.now || (() => new Date()) });
   // Once-a-minute heartbeats are not activity and would be most of the file; errors on them are still kept.
-  // (the request log writes the path as the member router saw it, without "/api/me", so both spellings are matched)
+  // (the request log writes the whole path, "/api/me" included; lines written before that change lack it, so both are matched)
   const HEARTBEAT = /"msg":"request".*"path":"(?:\/api\/me)?\/(presence|messages\/unread-count)","status":[23]/;
   logger.tee = (line) => { if (!HEARTBEAT.test(line)) activityLog.append(line); };
   // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
@@ -1758,7 +1758,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership, activePlan: cl.activePlan, isInpatient: cl.isInpatient, fullAccess: cl.fullAccess });
 
-  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today, clinicDay: (iso) => { if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso; const d = new Date(iso || NaN); return Number.isNaN(d.getTime()) ? "" : nowParts(cfg.tz, d).date; } }); // Insights: what members do inside the app (counts only). clinicDay: the clinic's date for a timestamp ("" if it cannot be read; a plain date is already one)
+  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today, clinicDay: (iso) => { if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) { const t = Date.parse(iso + "T12:00:00Z"); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === iso ? iso : ""; } const d = new Date(iso || NaN); return Number.isNaN(d.getTime()) ? "" : nowParts(cfg.tz, d).date; } }); // Insights: what members do inside the app (counts only). clinicDay: the clinic's date for a timestamp ("" if it cannot be read; a plain date is already one)
 
   mountStaff({ admin, staff, activity }); // /api/admin/staff: the owner (and anyone with "staff") manages accounts
 

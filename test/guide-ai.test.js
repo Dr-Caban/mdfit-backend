@@ -136,14 +136,18 @@ const CRISIS = [
   "god I want to die", "i wanna die", "I give up, I want to end it all", "I want to end my life", "everyone would be better off dead",
   "I don't want to live", "I don’t want to be here anymore", "i dont want to be alive", "I do not want to live like this",
   "I want to hurt myself", "I might harm myself", "I am going to kill myself",
-  "I am struggling to breathe", "it is hard to breathe", "trouble breathing since last night", "difficulty breathing", "I can't breathe", "I can’t breathe", "I cannot breathe",
+  "I keep thinking about killing myself", "trying to hurt myself", "I hurt myself on purpose", "self harm", "self-harm", "I have been self harming",
+  "having a hard time breathing", "I am struggling to breathe", "it is hard to breathe", "trouble breathing since last night", "difficulty breathing", "I can't breathe", "I can’t breathe", "I cannot breathe",
   // whole words, not only the stem: these were missed while the list ended every entry at a word boundary
   "I feel suicidal", "thinking about suicide", "I think I overdosed", "it was an overdose", "I am having chest pains",
   "call 911", "this is an emergency", "chest pain", "I think it is a heart attack", "signs of a stroke", "I passed out", "she fainted", "severe bleeding"
 ];
 // Figures of speech and ordinary sentences that sit close to those words
 const NOT_CRISIS = ["my back is killing me", "oh god my stomach is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight",
-  "breathing exercises for stress", "it is hard to stretch my hip", "I have trouble sleeping", "I want to live healthier", "my knee hurts", "where are the programs"];
+  "breathing exercises for stress", "it is hard to stretch my hip", "I have trouble sleeping", "I want to live healthier", "my knee hurts", "where are the programs",
+  // an injury, said the way people in rehab say it: pain help, not the 911 answer
+  "I hurt myself lifting yesterday", "I might hurt myself doing that", "I keep hurting myself in the gym",
+  "I don't want to live in Florida", "I don't want to be here at the gym"];
 
 test("guide AI: every crisis phrase is caught and never sent, with the apostrophe a phone types too; figures of speech are not crisis words", async (t) => {
   const m = await model(() => ({ content: '{"say":"Sorry it hurts. Start with the pain tool.","places":["pain"],"area":"back"}' })); t.after(m.close);

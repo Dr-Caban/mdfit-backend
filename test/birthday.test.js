@@ -152,12 +152,58 @@ test("birthday: the member sees it, changes it and removes it in their own recor
   assert.equal(rec().birthdayGreeted, "2026", "a new date keeps this year's greeting");
   s.clock.now = new Date("2026-11-26T15:00:00Z");
   assert.equal(s.run(), 0, "no second greeting in a year already greeted");
-  // remove it: the date, whose it was and this year's greeting all go
+  // remove it: the date and whose it was go; the record of this year's greeting stays
   const rm = await s.call("PUT", "/api/me", { dob: "" }, bea.token);
   assert.equal(rm.status, 200); assert.equal(rm.body.client.dob, "");
-  assert.ok(!("dob" in rec()) && !("dobBy" in rec()) && !("birthdayGreeted" in rec()), JSON.stringify(rec()));
+  assert.ok(!("dob" in rec()) && !("dobBy" in rec()), JSON.stringify(rec()));
+  assert.equal(rec().birthdayGreeted, "2026");
   assert.equal((await me(bea.token)).dob, "");
+  // so removing it and giving it again on the day does not bring a second greeting
+  assert.equal((await s.call("PUT", "/api/me", { dob: "1988-11-26" }, bea.token)).status, 200);
+  assert.equal(s.run(), 0, "removed and given again: still greeted once this year");
+  assert.equal((await s.call("PUT", "/api/me", { dob: "" }, bea.token)).status, 200);
   s.clock.now = new Date("2027-11-26T15:00:00Z");
   assert.equal(s.run(), 0, "no birthday, no greeting");
   await s.settle(500);
+});
+
+test("birthday: staff views do not carry it, and a date of birth from the clinic's records is not the app's to change", async (t) => {
+  const s = await bootBirthday(t, "2026-11-24T15:00:00Z");
+  const bea = await s.signup("Bea Birthday", "1988-04-17"), imp = await s.signup("Ima Ported");
+  // the member sees their own; the workspace's client views (built for staff) do not show it
+  const login = await s.call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" });
+  assert.equal(login.status, 200); const A = login.body.token;
+  for (const u of [`/api/admin/clients/${bea.client.id}`, `/api/admin/clients/${bea.client.id}/overview`, "/api/admin/clients"]) {
+    const v = await s.call("GET", u, undefined, A);
+    assert.equal(v.status, 200, u); assert.equal(JSON.stringify(v.body).includes("1988-04-17"), false, `${u} carries no date of birth`);
+  }
+  // a date that came with imported records has no dobBy: the member sees it, marked as the clinic's
+  const l = s.stored(); const r = l.find((c) => c.id === imp.client.id); r.dob = "1970-03-04"; fs.writeFileSync(s.file, JSON.stringify(l));
+  const mine = (await s.call("GET", "/api/me", undefined, imp.token)).body.client;
+  assert.equal(mine.dob, "1970-03-04"); assert.equal(mine.dobLocked, true);
+  assert.equal((await s.call("GET", "/api/me", undefined, bea.token)).body.client.dobLocked, false);
+  // the same date sent back (a profile save) is fine and changes nothing; a new date or removing it is refused
+  const same = await s.call("PUT", "/api/me", { name: "Ima Ported", dob: "1970-03-04" }, imp.token);
+  assert.equal(same.status, 200);
+  for (const v of ["1971-03-04", ""]) {
+    const no = await s.call("PUT", "/api/me", { dob: v }, imp.token);
+    assert.equal(no.status, 409, JSON.stringify(v)); assert.match(no.body.error, /on file with the clinic/); assert.equal(no.body.dobLocked, true);
+  }
+  const kept = s.stored().find((c) => c.id === imp.client.id);
+  assert.equal(kept.dob, "1970-03-04"); assert.equal(kept.dobBy, undefined, "still the clinic's, never turned into the member's");
+  // and it is never greeted
+  s.clock.now = new Date("2027-03-04T15:00:00Z");
+  assert.equal(s.run(), 0);
+  await s.settle(500);
+});
+
+test("birthday: a push that fails does not cost the member the email", async (t) => {
+  const s = await bootBirthday(t, "2026-11-24T15:00:00Z");
+  await s.signup("Pia Push", "1990-11-25");
+  s.app.get("push").toClient = () => { throw new Error("made-up push failure"); };
+  s.clock.now = new Date("2026-11-25T15:00:00Z");
+  assert.equal(s.run(), 1);
+  await s.settle(500);
+  assert.deepEqual(s.greetings(), ["pia.push@example.com"], "the email still went");
+  assert.equal(s.run(), 0, "and only once");
 });

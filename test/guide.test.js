@@ -162,6 +162,17 @@ test("guide: reminders are checked, capped, listed soonest first, pushed once wh
   assert.deepEqual(guide.sweep({ enabled: false, toClient: () => { throw new Error("must not be called"); } }), { sent: 0 });
   // the server was down over the time: more than an hour late is not sent late
   s.at("2026-11-13T14:30:00Z"); assert.deepEqual(guide.sweep(push), { sent: 0 }); assert.equal(out.length, 1);
+  // a save that fails sends nothing, however many minutes it keeps failing; once it works, the reminder goes once
+  const hips = await add({ title: "Hips", date: "2026-11-13", time: "16:00" }); assert.equal(hips.status, 201);
+  const blocker = path.join(s.dataDir, "clients.json") + "." + process.pid + ".tmp";
+  fs.mkdirSync(blocker); // the next write of the client list fails, as a full disk would
+  s.at("2026-11-13T21:00:20Z");
+  for (let i = 0; i < 3; i++) assert.throws(() => guide.sweep(push));
+  assert.equal(out.length, 1, "nothing is pushed while the save fails");
+  fs.rmdirSync(blocker);
+  assert.deepEqual(guide.sweep(push), { sent: 1 }); assert.deepEqual(guide.sweep(push), { sent: 0 });
+  assert.equal(out.length, 2); assert.equal(out[1].body, "Hips");
+  assert.equal((await s.call("DELETE", `${u}/${hips.body.reminder.id}`, undefined, fay.token)).status, 200); // back to where the test was
 
   // delete; someone else's or a made-up id is not found
   assert.equal((await s.call("DELETE", `${u}/${later.body.reminder.id}`, undefined, ned.token)).status, 404);
@@ -461,7 +472,7 @@ test("guide AI answers: crisis words are answered in the app, never sent to the 
   for (const p of people) assert.equal((await s.call("GET", "/api/me/guide", undefined, p.token)).body.used, 0, "and none was counted");
   assert.equal(s.everything().includes(MARK), false, "nothing typed was kept");
   // close to those words, but a figure of speech or an ordinary sentence: read by the model like anything else
-  const fig = await s.signup("Fig Speech"), FIGURES = ["my back is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight", "breathing exercises for stress"];
+  const fig = await s.signup("Fig Speech"), FIGURES = ["my back is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight", "breathing exercises for stress", "I hurt myself lifting yesterday"];
   for (const [i, text] of FIGURES.entries()) {
     const r = (await s.call("POST", "/api/me/guide/ask", { text }, fig.token)).body;
     assert.equal(r.ok, true, text); assert.equal(r.urgent, undefined, text); assert.equal(r.say, "Sorry it hurts. Start with the pain tool.", text); assert.equal(m.seen.length, i + 1, text);
@@ -500,6 +511,8 @@ test("guide: Insights counts which looks members chose and how often each switch
   await s.call("PUT", u, { view: "simple" }, fay.token); await s.call("PUT", u, { view: "simple" }, gus.token);
   await s.call("PUT", u, { theme: "black" }, fay.token); await s.call("PUT", u, { theme: "white" }, fay.token);
   await s.call("PUT", u, { view: "simple" }, fay.token); // no change: not a move
+  // a patient the office added, who has never opened the app, has chosen no look and is not counted
+  assert.equal((await s.call("POST", "/api/admin/clients", { name: "Ivy Office", email: "ivy.office@example.com" }, A)).status, 201);
   const r = await s.call("GET", "/api/admin/analytics/looks", undefined, A);
   assert.equal(r.status, 200); assert.equal(r.body.members, 3);
   assert.equal(r.body.looks[0].key, "view", "the most changed switch comes first");

@@ -113,6 +113,22 @@ test("status: 'started' only after the recipient opened the send, and never for 
   assert.deepEqual(Object.keys(sent[0]).sort(), ["from", "id", "incoming", "kind", "ref", "sentOn", "status", "title", "to"]);
 });
 
+test("status: a session of a program whose id merely starts the same way does not count as the one sent", async (t) => {
+  const s = await start(); t.after(s.close);
+  const a = await s.member("Ann Lee"), b = await s.member("Bo Kim");
+  const statusOf = async (ref) => (await s.call("GET", "/api/me/sends", undefined, a.token)).body.sent.find((x) => x.ref === ref).status;
+  const session = (key) => s.call("POST", "/api/me/workouts", { title: "Session", minutes: 20, exercises: 3, key }, b.token);
+  assert.equal((await s.call("POST", "/api/me/sends", { toId: b.client.id, kind: "program", ref: "golf" }, a.token)).status, 201);
+  const id = (await s.call("GET", "/api/me/sends", undefined, b.token)).body.inbox.find((x) => x.ref === "golf").id;
+  await s.pause(); assert.equal((await s.call("POST", `/api/me/sends/${id}/open`, undefined, b.token)).status, 200);
+  // golf-intermediate and golf-advanced are other programs: their sessions say nothing about "golf"
+  await s.pause(); await session("prog-golf-intermediate-d0"); await session("prog-golf-advanced-d1");
+  assert.equal(await statusOf("golf"), "opened");
+  // a session of golf itself does
+  await session("prog-golf-d0");
+  assert.equal(await statusOf("golf"), "started");
+});
+
 test("only someone with an open app account they have signed in to can be listed, sent to or challenged", async (t) => {
   const s = await start(); t.after(s.close);
   const a = await s.member("Ann Lee"), b = await s.member("Bo Kim"), hid = await s.member("Hida Den"), clo = await s.member("Clovis Shutt");
