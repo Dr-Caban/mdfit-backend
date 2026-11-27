@@ -371,4 +371,16 @@ test("an invited person comes in on the screen that invited them, not whichever 
   assert.equal(desk4.last("tele_started"), undefined, "not on another account's");
   back.fire("tele_end");
   assert.equal(pat4.last("tele_ended").data.why, "ended", "and that screen can end the visit");
+
+  // The member is already waiting and the owner presses Invite on the older of two open screens: that screen was just
+  // heard from, so the member comes in there, in front of the person who pressed it
+  const laptop = conn(), phone = conn(), pat5 = conn("pat1");
+  const tele4 = createTelehealth({ audit, ownerEmail: "owner@example.com", now: () => 1000, describe: () => ({ name: "Pat Doe" }), invite: async () => ({ name: "Pat Doe" }) });
+  tele4.staffJoin(laptop); tele4.staffJoin(phone); tele4.patientJoin(pat5);
+  pat5.fire("tele_knock");
+  laptop.fire("tele_invite", { clientId: "pat1" }); await tick();
+  assert.equal(laptop.last("tele_started").data.clientId, "pat1", "on the screen that pressed Invite");
+  assert.equal(phone.last("tele_started"), undefined, "not on the newer one");
+  laptop.fire("tele_end");
+  assert.equal(pat5.last("tele_ended").data.why, "ended");
 });

@@ -651,6 +651,7 @@ test("8c. the accountability credit is for the membership's own line; other line
   const promo = {
     in_promo20: [off(sub(2995), 599)],                                // 20% off: $23.96 before the credit
     in_promo20_newer: [off({ ...sub(2995), discount_amounts: [] }, 599, "pretax_credit_amounts")],
+    in_promo20_both: [{ ...off(sub(2995), 599), pretax_credit_amounts: [{ amount: 599, discount: "di_1", type: "discount" }] }], // the shape sent now: both lists
     in_promo20_addon: [off(sub(2995), 599), item(1500)],              // and a $15 add-on, charged in full
     in_promo50: [off(sub(2995), 1498)],                               // 50% off: $14.97, already below what the app shows
     // Lines in the current shape name their price by id; one fetched in full names its tier
@@ -663,7 +664,7 @@ test("8c. the accountability credit is for the membership's own line; other line
   assert.equal((await s.hook("invoice.created", invoice("in_promo20_more", promoMore, { total: net(promoMore), lines: { object: "list", data: promoMore, has_more: true } }))).status, 200);
   promo.in_promo20_more = promoMore;
   const paid = Object.fromEntries(Object.keys(promo).map((id) => [id, net(promo[id]) + ((items.find(([i]) => i === id) || [])[1] || 0)]));
-  assert.deepEqual(paid, { in_promo20: 1795, in_promo20_newer: 1795, in_promo20_addon: 3295, in_promo50: 1497, in_expanded: 3295, in_promo20_more: 1795 },
+  assert.deepEqual(paid, { in_promo20: 1795, in_promo20_newer: 1795, in_promo20_both: 1795, in_promo20_addon: 3295, in_promo50: 1497, in_expanded: 3295, in_promo20_more: 1795 },
     "a promotion code and the credit together never take the membership below what the app shows");
   assert.equal(items.some(([id]) => id === "in_promo50"), false, "no credit on a month the code already made cheaper");
 
@@ -707,19 +708,27 @@ test("8c. the accountability credit is for the membership's own line; other line
   fail = Object.assign(new Error("Conflict."), { type: "StripeInvalidRequestError", statusCode: 409, headers: { "stripe-should-retry": "true" } });
   assert.equal((await s.hook("invoice.created", invoice("in_409", [sub(2995)]), "evt_409")).status, 500);
 
-  // The key was used before with other amounts (a delivery after a lost answer, once the member's days changed): the
-  // credit Stripe made then is on the invoice, so nothing failed and nothing is made twice
+  // The key was used before (a delivery after a lost answer): the credit Stripe made then is on the invoice, so nothing
+  // failed and nothing is made twice
+  const keyErr = () => Object.assign(new Error("Keys for idempotent requests can only be used with the same parameters they were first used with."), { type: "StripeIdempotencyError", statusCode: 400 });
   errors.length = 0; infos.length = 0; items.length = 0;
-  listed.push({ invoice: "in_keyed", amount: -1100, description: "Accountability credit: 11 active days (−$11.00)" });
-  fail = Object.assign(new Error("Keys for idempotent requests can only be used with the same parameters they were first used with."), { type: "StripeIdempotencyError", statusCode: 400 });
+  listed.push({ invoice: "in_keyed", amount: -1200, description: "Accountability credit: 12 active days (−$12.00)" });
+  fail = keyErr();
   assert.equal((await s.hook("invoice.created", invoice("in_keyed", [sub(2995)]), "evt_keyed")).status, 200);
   assert.deepEqual(errors, [], "not reported as a failed credit");
-  assert.ok(infos.some(([e, d]) => e === "accountability_credit_already_made" && d.creditCents === 1100));
+  assert.ok(infos.some(([e, d]) => e === "accountability_credit_already_made" && d.creditCents === 1200));
   assert.equal(items.length, 0);
-  // ...but if no credit is on the invoice after all, it is
-  fail = Object.assign(new Error("Keys for idempotent requests can only be used with the same parameters they were first used with."), { type: "StripeIdempotencyError", statusCode: 400 });
+  // Made for another amount than the app now shows (the member's days changed between deliveries): an error the review sees
+  listed.push({ invoice: "in_keyed_other", amount: -1100, description: "Accountability credit: 11 active days (−$11.00)" });
+  fail = keyErr();
+  assert.equal((await s.hook("invoice.created", invoice("in_keyed_other", [sub(2995)]), "evt_keyed_other")).status, 200);
+  assert.deepEqual(errors, ["accountability_credit_differs"]);
+  // ...and if no credit of the app's own is on the invoice (only an add-on, and a credit typed in the dashboard), it failed
+  errors.length = 0;
+  listed.push({ invoice: "in_keyed2", amount: 1500, description: "Coaching add-on" }, { invoice: "in_keyed2", amount: -500, description: "Accountability credit adjustment (by hand)" });
+  fail = keyErr();
   assert.equal((await s.hook("invoice.created", invoice("in_keyed2", [sub(2995)]), "evt_keyed2")).status, 200);
-  assert.ok(errors.includes("accountability_credit_failed"));
+  assert.deepEqual(errors, ["accountability_credit_failed"]);
 });
 
 test("9. the member's calendar and its feed put a payment on the clinic's day, evenings included", async (t) => {
