@@ -90,10 +90,14 @@ test("calendar: calendarChanged is shared on the app and debounces per member", 
 });
 
 test("calendar feed: a private link for the phone's calendar, titles only, and a new link retires the old", async () => {
+  // The feed carries the last 90 days and what is ahead, counted from today, so every date here is counted from today
+  // too: a member since seven weeks ago who renews in ten days, an invoice from last week. (Fixed dates fell out of
+  // the 90 days as the year went on.)
+  const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   const client = { id: "c1", email: "a@example.com", emailVerifiedAt: "2026-01-01",
-    membership: { tier: "member", since: "2026-10-03", until: "2026-12-03", stripeSubscriptionId: "sub_1", status: "active" } };
-  const { routes, data, store } = setup({ client, invoices: [{ id: "i1", number: "INV-1001", date: "2026-11-16", amount: 12000, status: "unpaid", description: "Dry needling, left shoulder" }] });
-  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10), old = new Date(Date.now() - 200 * 864e5).toISOString().slice(0, 10);
+    membership: { tier: "member", since: day(-50), until: day(10), stripeSubscriptionId: "sub_1", status: "active" } };
+  const { routes, data, store } = setup({ client, invoices: [{ id: "i1", number: "INV-1001", date: day(-6), amount: 12000, status: "unpaid", description: "Dry needling, left shoulder" }] });
+  const soon = day(3), old = day(-200);
   store.write("appointments", [
     { id: "a1", clientId: "c1", date: soon, time: "15:00", minutes: 30, typeName: "Dry needling follow-up", status: "booked" },
     { id: "a2", clientId: "c1", date: soon, time: "09:00", typeName: "Video consult", typeId: "telehealth", status: "booked" },

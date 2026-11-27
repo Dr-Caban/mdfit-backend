@@ -14,6 +14,9 @@ logger.level = 99;
 
 const NOW = new Date("2026-11-12T15:00:00Z");
 const at = (iso) => Math.floor(Date.parse(iso) / 1000);
+// The clinic's month ("2026-11") for an instant, and the n months ending in a given one
+const clinicMonth = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit" }).format(d).slice(0, 7);
+const monthsEnding = (m, n) => Array.from({ length: n }, (_, i) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5) - n + i, 1)).toISOString().slice(0, 7));
 async function* each(rows) { for (const r of rows) yield r; }
 
 async function start(extra = {}) {
@@ -28,7 +31,12 @@ async function start(extra = {}) {
 }
 
 test("economics: staff only; with no Stripe key it says so and every other figure still comes from the records", async (t) => {
-  const s = await start(); t.after(s.close);
+  // A new account is stamped with the real clock, not the app's (lib/clients.js), and sign-ups are counted by month.
+  // So this test runs the app on the real clock and works the months out from it; with a fixed app clock it went red
+  // the day the real month moved on. Started in the last seconds of a month, it waits for the next one to begin.
+  if (clinicMonth(new Date()) !== clinicMonth(new Date(Date.now() + 10000))) await new Promise((r) => setTimeout(r, 10500));
+  const REAL = new Date(), month = clinicMonth(REAL);
+  const s = await start({ now: () => REAL }); t.after(s.close);
   assert.equal((await s.call("GET", "/api/admin/economics")).status, 401);
   const A = await s.adminToken();
   const sam = await s.signup("Sam Sample"); await s.signup("Pat Paid");
@@ -37,12 +45,12 @@ test("economics: staff only; with no Stripe key it says so and every other figur
   assert.equal((await s.call("POST", `/api/admin/emr/${sam.client.id}/invoices`, { amount: 80.5, description: "Private matter two" }, A)).status, 201);
   const r = await s.call("GET", "/api/admin/economics?months=6", undefined, A);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.months, ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
-  assert.equal(r.body.currentMonth, "2026-11");
+  assert.deepEqual(r.body.months, monthsEnding(month, 6)); // six months ending in this one, e.g. 2026-06 to 2026-11
+  assert.equal(r.body.currentMonth, month);
   assert.equal(r.body.stripe.on, false);
-  assert.equal(r.body.outside["2026-11"], 12000, "the cash invoice counts as money taken outside Stripe");
+  assert.equal(r.body.outside[month], 12000, "the cash invoice counts as money taken outside Stripe");
   assert.deepEqual(r.body.owed, { count: 1, total: 8050 });
-  assert.equal(r.body.people.total, 2); assert.equal(r.body.people.signups["2026-11"], 2);
+  assert.equal(r.body.people.total, 2); assert.equal(r.body.people.signups[month], 2);
   assert.equal(r.body.members.paying, 0); assert.equal(r.body.members.listMonthly, 0);
   assert.deepEqual(r.body.costs, []); assert.equal(r.body.costsMonthly, 0); assert.equal(r.body.systemMonthly, 0); assert.equal(r.body.expensesMonthly, 0);
   const whole = JSON.stringify(r.body);

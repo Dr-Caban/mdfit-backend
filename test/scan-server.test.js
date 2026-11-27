@@ -421,7 +421,8 @@ test("logs: heartbeats stay out of the activity log, emails and device tokens ou
     assert.equal((await s.call("POST", "/api/me/membership/request", { tier: "premium" }, pat.token)).status, 201);
   });
   const requests = lines.filter((l) => l.includes('"msg":"request"')).join("\n");
-  assert.match(requests, /"path":"\/subscribers\/\[hidden\]"/); assert.match(requests, /"path":"\/devices\/\[hidden\]"/);
+  // the request log writes the whole path, "/api/admin" or "/api/me" included (it used to drop that part)
+  assert.match(requests, /"path":"\/api\/admin\/subscribers\/\[hidden\]"/); assert.match(requests, /"path":"\/api\/me\/devices\/\[hidden\]"/); assert.match(requests, /"path":"\/api\/admin\/devices\/\[hidden\]"/);
   assert.equal(/someone|example\.com/.test(requests), false, "no address in the request log");
   assert.equal(requests.includes(device), false, "no device token in the request log");
   // the activity line says what happened, with the address masked and no name; the owner's own feed keeps the name
@@ -430,7 +431,7 @@ test("logs: heartbeats stay out of the activity log, emails and device tokens ou
   assert.equal((await s.call("GET", "/api/admin/activity", undefined, A)).body.find((e) => e.type === "membership_request").name, "Pat Doe");
   // what was kept on the volume for that day
   const kept = (await s.call("GET", "/api/admin/logs?date=2026-11-02&limit=5000", undefined, A)).body.entries.filter((e) => e.msg === "request");
-  assert.ok(kept.some((e) => e.path === "/content"), "ordinary requests are kept");
+  assert.ok(kept.some((e) => e.path === "/api/me/content"), "ordinary requests are kept");
   assert.deepEqual(kept.filter((e) => /presence|unread-count/.test(e.path)).map((e) => e.path), [], "the once-a-minute heartbeats are not");
 });
 

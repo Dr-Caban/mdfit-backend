@@ -182,7 +182,7 @@ function createApp(cfg = loadConfig()) {
   const activityLog = createActivityLog({ dir: path.join(cfg.dataDir, "logs"), key: cfg.dataKey || cfg.sessionSecret,
     keepDays: Math.max(7, Math.min(365, Number(process.env.LOG_KEEP_DAYS) || 90)), now: cfg.now || (() => new Date()) });
   // Once-a-minute heartbeats are not activity and would be most of the file; errors on them are still kept.
-  // (the request log writes the path as the member router saw it, without "/api/me", so both spellings are matched)
+  // (the request log writes the whole path, "/api/me" included; lines written before that change lack it, so both are matched)
   const HEARTBEAT = /"msg":"request".*"path":"(?:\/api\/me)?\/(presence|messages\/unread-count)","status":[23]/;
   logger.tee = (line) => { if (!HEARTBEAT.test(line)) activityLog.append(line); };
   // Email delivery log for Admin → Analytics: sent/failed per day and the latest failures (addresses masked)
@@ -343,8 +343,9 @@ function createApp(cfg = loadConfig()) {
     const list = store.read("activity", []);
     list.unshift({ time: new Date().toISOString(), ...detail, type }); // the event type wins over any detail field named "type"
     store.write("activity", list.slice(0, ACTIVITY_MAX));
-    // the log line never carries a person's name (the feed above and the owner's push do; the log leaves the server)
-    logger.info("activity", { type, ...detail, name: undefined, email: detail.email ? mask(detail.email) : undefined });
+    // the log line never carries a person's name (the feed above and the owner's push do; the log leaves the server),
+    // and an email address is masked in whatever field it arrives (a changed address comes as "previousEmail")
+    logger.info("activity", { type, ...require("./lib/logger").maskEmails(detail), name: undefined, email: detail.email ? mask(detail.email) : undefined });
     const rt = app.get("rt");
     if (rt) rt.emitActivity(type, detail);
     push.ownerActivity(type, detail); // Dr. Jared's phone (MD Fit app, signed in to Admin)
@@ -1528,7 +1529,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   cl.me.get("/telehealth/invite", (req, res) => res.json({ invited: app.get("telehealth").isInvited(req.client.id) }));
   // The room starts as a live room (owner, Nov 2026): everyone admitted is a viewer until made a speaker. The host can
   // switch it to a private one to one visit while the room is empty. TELEHEALTH_START=private makes that the default.
-  app.set("telehealth", tele.createTelehealth({ audit, logger, now: () => cfg.now().getTime(), live: (process.env.TELEHEALTH_START || "live") !== "private",
+  app.set("telehealth", tele.createTelehealth({ audit, logger, ownerEmail: cfg.adminEmail, now: () => cfg.now().getTime(), live: (process.env.TELEHEALTH_START || "live") !== "private",
     // An invitation: a notice in the app, a push to their phone and an email. Each says only that there is a video
     // session to join and where; nothing about the member's care.
     invite: (id) => {
@@ -1757,7 +1758,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
   require("./lib/guide").mountGuide({ app, admin, me: cl.me, store, cfg, limiter, logger, push, zonedToUtc, guideAI, audit,
     clients: cl.clients, save: cl.save, today: cl.today, activeMembership: cl.activeMembership, activePlan: cl.activePlan, isInpatient: cl.isInpatient, fullAccess: cl.fullAccess });
 
-  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today }); // Insights: what members do inside the app (counts only)
+  require("./lib/member-insights").mountMemberInsights({ admin, store, clients: cl.clients, today: cl.today, clinicDay: (iso) => { if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) { const t = Date.parse(iso + "T12:00:00Z"); return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === iso ? iso : ""; } const d = new Date(iso || NaN); return Number.isNaN(d.getTime()) ? "" : nowParts(cfg.tz, d).date; } }); // Insights: what members do inside the app (counts only). clinicDay: the clinic's date for a timestamp ("" if it cannot be read; a plain date is already one)
 
   mountStaff({ admin, staff, activity }); // /api/admin/staff: the owner (and anyone with "staff") manages accounts
 
@@ -1769,7 +1770,27 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Invalid JSON." });
     if (err.type === "entity.too.large") return res.status(413).json({ error: "Request too large." });
-    logger.error("server_error", { path: req.path, error: err.message, ...(process.env.NODE_ENV === "test" ? { stack: err.stack } : {}) });
+    // The path as the request log writes it: a share key, a device token or a subscriber's email in it is blanked
+    const path = require("./lib/logger").logPath(req);
+    // The caller hung up before the whole request arrived (a phone losing signal). The connection is already closed,
+    // so there is nobody to answer, and it is no fault of this server: it is noted and nothing more.
+    if (err.type === "request.aborted") { logger.info("request_aborted", { path }); return; }
+    // Requests the framework itself turned away as the caller's mistake: a body in an unknown character set or wrongly
+    // marked as compressed (its body reader marks those errors "expose"), a path with a broken % escape (a URIError).
+    // They get the framework's own 4xx. The log line names the kind only, never the message, which can repeat what
+    // was sent. A 4xx on any other error comes from a service this server called (the card processor, Google)
+    // refusing the server, not the caller, so that stays a server error below.
+    const status = Number(err.status || err.statusCode);
+    if (status >= 400 && status < 500 && (err.expose === true || err instanceof URIError)) {
+      logger.warn("bad_request", { path, status, kind: err.type || err.code || err.name });
+      return res.status(status).json({ error: "Invalid request." });
+    }
+    // A field sent as an object where text or a number belongs: String() and Number() cannot read it
+    if (err instanceof TypeError && /Cannot convert object to primitive value/.test(err.message)) {
+      logger.warn("bad_request", { path, status: 400, kind: "object_for_value" });
+      return res.status(400).json({ error: "Invalid value." });
+    }
+    logger.error("server_error", { path, error: err.message, ...(process.env.NODE_ENV === "test" ? { stack: err.stack } : {}) });
     res.status(500).json({ error: "Something went wrong. Try again." });
   });
 

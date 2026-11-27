@@ -19,7 +19,7 @@ function harness({ hour = 12, clientsList = [], devices = [{ clientId: "c1" }] }
     prettyTime: (t) => t, tz: "America/New_York", now: () => new Date(`${today}T${String(hour).padStart(2, "0")}:00:00Z`),
     logger: { warn() {} }
   });
-  return { n, sentOut, list: () => list, data };
+  return { n, sentOut, list: () => list, data, store };
 }
 const days = (...d) => d.map((date) => ({ date, kind: "normal", minutes: 20, exercises: 5 }));
 
@@ -79,6 +79,20 @@ test("a member with no device is never swept", async () => {
   const h = harness({ devices: [], clientsList: [{ id: "c1", workouts: days("2026-11-09", "2026-11-10", "2026-11-11"), notified: { badges: [], level: 1, goal: "", streak: "" } }] });
   h.n.sweep();
   assert.equal(h.sentOut.length, 0);
+});
+
+test("a sweep reads the time-in-app store once, however many members have a phone", async () => {
+  const ids = ["c1", "c2", "c3", "c4", "c5"];
+  const h = harness({ devices: ids.map((clientId) => ({ clientId })), clientsList: ids.map((id) => ({ id, workouts: days("2026-11-11"), notified: { badges: [], level: 9, goal: "2026-11-11", streak: "" } })) });
+  h.data.presence = Object.fromEntries(ids.map((id) => [id, { lastAt: 1, days: { "2026-11-11": { seconds: 60, sessions: 1 } } }]));
+  let reads = 0; const read = h.store.read; h.store.read = (k, d) => { if (k === "presence") reads++; return read(k, d); };
+  h.n.sweep();
+  assert.equal(reads, 1, "once per sweep, not once per member");
+  // and not at all when nobody has a phone to notify
+  const none = harness({ devices: [], clientsList: [{ id: "c1" }] });
+  let idle = 0; const r2 = none.store.read; none.store.read = (k, d) => { if (k === "presence") idle++; return r2(k, d); };
+  none.n.sweep();
+  assert.equal(idle, 0);
 });
 
 test("a class is reminded the evening before and an hour before, each once", async () => {

@@ -121,3 +121,54 @@ test("anything added from the chart emails the client once, the same private mes
     for (const e of care()) assert.ok(!/PSG|Perpetual|Cold shower|levator|Ankle circles|Twice a week|Keep going/i.test(e.text + (e.html || "")), e.text);
   } finally { server.close(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("start over keeps a pain track Dr. Jared prescribed on the road; the member's own tracks leave it", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-painstart-"));
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date(), siteUrl: "https://mdfit.example.com" });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, url, body, token) => { const r = await fetch(base + url, { method, headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => undefined) }; };
+  try {
+    const admin = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+    const m = (await call("POST", "/api/clients/signup", { name: "Jabari Cole", email: "j@example.com", phone: "941-555-0100", password: "pass-word-123" })).body;
+    await call("PUT", "/api/me/about/tracks/scalenes", undefined, m.token);                                       // his own
+    assert.equal((await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator" }, { kind: "track", id: "supraspinatus" }] }, admin)).status, 200);
+    await call("DELETE", "/api/me/about/tracks/supraspinatus", undefined, m.token);                                // he took this one off himself
+    assert.deepEqual((await call("GET", "/api/me/about", undefined, m.token)).body.tracks.sort(), ["levator", "scalenes"]);
+    assert.equal((await call("POST", "/api/me/start-over", { password: "pass-word-123" }, m.token)).status, 200);
+    assert.deepEqual((await call("GET", "/api/me/about", undefined, m.token)).body.tracks, ["levator"], "the prescribed track he kept stays; his own goes; one he took off stays off");
+    const chart = (await call("GET", `/api/admin/clients/${m.client.id}`, undefined, admin)).body;
+    const lev = chart.painWork.items.find((x) => x.kind === "track" && x.id === "levator");
+    assert.equal(lev.prescribed, true); assert.equal(lev.onRoad, true, "the chart still shows it on his road");
+  } finally { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("pain plan: an object for a kind or id answers 400; a closed account is sent no care-plan email", async () => {
+  const http = require("http"), mails = [];
+  const mailer = http.createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { try { const j = JSON.parse(b); (Array.isArray(j) ? j : [j]).forEach((m) => mails.push(m)); } catch {} res.writeHead(200, { "content-type": "application/json" }); res.end('{"id":"x"}'); }); }).listen(0);
+  await new Promise((r) => mailer.once("listening", r));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-painclosed-"));
+  const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date(), siteUrl: "https://mdfit.example.com",
+    resendKey: "test-key", notifyFrom: "MD Fit <hello@example.com>", resendUrl: `http://127.0.0.1:${mailer.address().port}`, notifyGapMs: 0 });
+  const server = app.listen(0); await new Promise((r) => server.once("listening", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, url, body, token) => { const r = await fetch(base + url, { method, headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => undefined) }; };
+  const pause = () => new Promise((r) => setTimeout(r, 400));
+  try {
+    const admin = (await call("POST", "/api/admin/login", { email: "coach@example.com", password: "admin-pass-123" })).body.token;
+    const m = (await call("POST", "/api/clients/signup", { name: "Cleo Closed", email: "cleo@example.com", phone: "941-555-0100", password: "pass-word-123" })).body;
+    for (const item of [{ kind: { toString: "x" }, id: "levator" }, { kind: "track", id: { toString: "x" } }, { kind: ["track"], id: "levator" }, null]) {
+      const r = await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [item] }, admin);
+      assert.equal(r.status, 400, JSON.stringify(item)); assert.equal(r.body.error, "That pain track or protocol isn't in MD Fit.");
+    }
+    // a check-in makes it a chart, so closing the account keeps the record ("Closed account")
+    await call("POST", "/api/me/pain", { area: "Knee", level: 3 }, m.token);
+    assert.equal((await call("POST", "/api/me/account/deletion", { confirm: "DELETE", password: "pass-word-123" }, m.token)).body.mode, "close");
+    await pause();
+    const n = mails.length;
+    assert.equal((await call("PUT", `/api/admin/clients/${m.client.id}/pain-plan`, { items: [{ kind: "track", id: "levator" }] }, admin)).status, 200);
+    assert.equal((await call("PUT", `/api/admin/clients/${m.client.id}/programs`, { programs: [{ id: "hypertrophy-12" }] }, admin)).status, 200);
+    await pause();
+    assert.deepEqual(mails.slice(n).map((x) => [].concat(x.to)[0] + " / " + x.subject), [], "nothing to the placeholder address");
+  } finally { server.close(); mailer.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -533,14 +533,15 @@ test("11. Solomon: questions sent at the same moment cannot all slip under the d
   assert.equal((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, gus.token)).body.limited, true);
 
   // the model answered but not in a form that can be used: the app falls back to the device, and the call is counted
+  // (the reply says AI answers are on and this one failed; { ai: false } is only for the owner's switch being off)
   const hal = await s.signup("Hal Free"); mode = "nonsense";
-  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, hal.token)).body, { ok: false, ai: false });
+  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, hal.token)).body, { ok: false, ai: true, failed: true });
   assert.equal(await used(hal), 4000, "counted at what was held (the last answer's cost)");
-  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, hal.token)).body, { ok: false, ai: false });
+  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, hal.token)).body, { ok: false, ai: true, failed: true });
   assert.equal((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, hal.token)).body.limited, true, "so it cannot be asked without end");
   // the service refused: nothing was produced, nothing is counted, and nothing stays held
   const ivy = await s.signup("Ivy Free"); mode = "refuse";
-  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, ivy.token)).body, { ok: false, ai: false });
+  assert.deepEqual((await s.call("POST", "/api/me/guide/ask", { text: "my knee hurts" }, ivy.token)).body, { ok: false, ai: true, failed: true });
   assert.equal(await used(ivy), 0);
 });
 

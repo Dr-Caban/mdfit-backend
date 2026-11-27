@@ -575,6 +575,34 @@ test("8. the accountability credit counts each day on one invoice, and the app s
   });
 });
 
+test("8b. the accountability credit is worked out from the invoice's own amount, so a member billed the old $30 still pays $10", async (t) => {
+  const items = [];
+  const clock = new Date("2026-11-15T14:00:05Z");
+  const stripe = { webhooks: real.webhooks, invoiceItems: { create: async (p) => { items.push([p.invoice, p.amount]); return {}; } } };
+  const s = await start(t, stripe, { now: () => clock });
+  // tiers saved before the price change, never re-saved by the owner: the app lists Accountability at $29.95
+  s.writeJson("content", { tiers: [{ id: "member", name: "Membership", price: 20, perks: ["Programs"] }, { id: "accountability", name: "Accountability", price: 30, floor: 10, accountability: true, perks: ["Check-ins"] }] });
+  await s.signup("Pat Doe");
+  // 25 active days in the period: the credit stops at 20
+  const days = Array.from({ length: 25 }, (_, i) => ({ date: new Date(Date.UTC(2026, 9, 16 + i)).toISOString().slice(0, 10) }));
+  s.edit("pat.doe@example.com", (c) => { c.stripeCustomerId = "cus_1"; c.workouts = days; });
+  const sub = { id: "sub_a", object: "subscription", customer: "cus_1", status: "active", metadata: { kind: "membership", tier: "accountability" }, items: { data: [{ current_period_start: unix("2026-10-15T14:00:00Z"), current_period_end: unix("2026-11-15T14:00:00Z") }] } };
+  assert.equal((await s.hook("customer.subscription.updated", sub)).status, 200);
+  // total: the invoice before any account credit; amount_due: after it (Stripe's own fields)
+  const invoice = (id, total, due = total) => ({ id, object: "invoice", customer: "cus_1", total, amount_due: due, period_start: unix("2026-10-15T14:00:00Z"), period_end: unix("2026-11-15T14:00:00Z"), parent: { subscription_details: { subscription: "sub_a" } } });
+  const promised = (await s.call("GET", "/api/me/accountability", undefined, (await s.call("POST", "/api/clients/login", { email: "pat.doe@example.com", password: "made-up-pass-1" })).body.token)).body.owed;
+  assert.equal(promised, 10, "the app promises $10 for 20 or more active days");
+  // a member still on the old Stripe price ($30) and one on the current price ($29.95) both pay the $10 floor
+  await s.hook("invoice.created", invoice("in_old", 3000));
+  await s.hook("invoice.created", invoice("in_new", 2995));
+  // a member holding $5 of account credit: the floor is worked out before that credit, so the credit still counts
+  await s.hook("invoice.created", invoice("in_bal", 2995, 2495));
+  // a month a promotion code already made free gets no credit (it would be paid out as account credit)
+  await s.hook("invoice.created", invoice("in_free", 0));
+  assert.deepEqual(items, [["in_old", -2000], ["in_new", -1995], ["in_bal", -1995]]);
+  assert.deepEqual(items.map(([id, credit]) => [id, ({ in_old: 3000, in_new: 2995, in_bal: 2995 })[id] + credit]), [["in_old", 1000], ["in_new", 1000], ["in_bal", 1000]], "each invoice comes to exactly the $10.00 the app shows");
+});
+
 test("9. the member's calendar and its feed put a payment on the clinic's day, evenings included", async (t) => {
   const { mountMemberCalendar } = require("../lib/member-calendar");
   const { mountPayments } = require("../lib/payments");
@@ -606,7 +634,10 @@ test("9. the member's calendar and its feed put a payment on the clinic's day, e
     assert.deepEqual(await on("2026-12-01"), ["Membership renews|Billed to the card on file"], "on the evening it is charged");
     assert.deepEqual(await on("2026-12-02"), []);
   });
-  await t.test("the calendar feed", async () => {
+  await t.test("the calendar feed", async (t) => {
+    // The feed carries the last 90 days counted from the real clock, so it is read as on the day this test is set on
+    // (19 November 2026, the "today" given to payments above). Only the date is pinned; timers run as usual.
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-19T15:00:00Z") });
     const ics = await cal.feed(client);
     assert.match(ics, /DTSTART;VALUE=DATE:20261118\r\nDTEND;VALUE=DATE:20261119\r\nSUMMARY:MD Fit invoice 1001/);
     assert.equal(/DTSTART;VALUE=DATE:20261119/.test(ics), false, "nothing on the 19th");
