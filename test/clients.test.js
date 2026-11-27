@@ -1088,3 +1088,60 @@ test("referral tracking: Copy and Share presses, link visits, codes typed after 
   const lee = (await s.call("POST", "/api/clients/login", { email: "lee@example.com", password: "pat-pass-123" })).body.token;
   assert.equal((await s.call("POST", "/api/me/referral/claim", { code }, lee)).status, 400);
 });
+
+test("the reset link is the practice owner's only: staff are refused and send the member a code instead", async (t) => {
+  const mail = await fakeResend(t);
+  const s = await start({ ...mail.cfg, notifyGapMs: 0 }); t.after(s.close);
+  const cid = (await signup(s)).body.client.id;
+  const A = await s.adminToken();
+  // a front desk account (Clients, no Charts) and a clinician (Clients and Charts): neither is the owner
+  for (const [email, role] of [["dee.desk@example.com", "frontdesk"], ["cara.clin@example.com", "clinician"]]) {
+    assert.equal((await s.call("POST", "/api/admin/staff", { name: "Made Up " + role, email, role, password: "staff-pass-1234" }, A)).status, 201);
+    const tok = (await s.call("POST", "/api/admin/login", { email, password: "staff-pass-1234" })).body.token;
+    const r = await s.call("POST", `/api/admin/clients/${cid}/reset-link`, {}, tok);
+    assert.equal(r.status, 403, role);
+    assert.deepEqual(r.body, { error: "Only the practice owner can do that.", need: "owner" }, "no link, no token");
+    assert.equal((await s.call("POST", "/api/admin/clients/no-such-id/reset-link", {}, tok)).status, 403, "refused before the id is looked up");
+    // what staff use instead: a code mailed to the member
+    const sent = await s.call("POST", `/api/admin/clients/${cid}/send-reset-code`, {}, tok);
+    assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  }
+  assert.equal((await mail.waitFor(/is your MD Fit code/, 2)).length, 2);
+  // the owner still gets it
+  const own = await s.call("POST", `/api/admin/clients/${cid}/reset-link`, {}, A);
+  assert.equal(own.status, 200); assert.match(own.body.url, /\/login\?reset=/);
+});
+
+test("an object where text belongs answers 400, not 500: sign-up birthday, start-over password and confirmation", async (t) => {
+  const s = await start(); t.after(s.close);
+  const OBJ = { toString: "x" }; // turning this into text throws
+  const su = await signup(s, { dob: OBJ });
+  assert.equal(su.status, 400); assert.match(su.body.error, /birthday/i);
+  for (const dob of [19900101, ["1990-01-01"], true]) assert.equal((await signup(s, { dob })).status, 400, JSON.stringify(dob));
+  const tok = (await signup(s)).body.token;
+  for (const password of [OBJ, ["pat-pass-123"], 12345678]) {
+    const r = await s.call("POST", "/api/me/start-over", { password }, tok);
+    assert.equal(r.status, 400, JSON.stringify(password)); assert.equal(r.body.error, "Type your password to confirm.");
+  }
+  assert.equal((await s.call("POST", "/api/me/start-over", { password: "wrong-pass-1" }, tok)).status, 403, "a wrong password is still 403");
+  // an account with no password confirms with RESET
+  const f = path.join(s.dataDir, "clients.json"), list = JSON.parse(fs.readFileSync(f, "utf8"));
+  list[0].passwordHash = null; fs.writeFileSync(f, JSON.stringify(list));
+  assert.equal((await s.call("POST", "/api/me/start-over", { confirm: OBJ }, tok)).status, 400);
+  assert.equal((await s.call("POST", "/api/me/start-over", { confirm: "reset" }, tok)).status, 200);
+});
+
+test("the workspace client list reads the time-in-app store once, however many clients there are", async (t) => {
+  const s = await start(); t.after(s.close);
+  for (let i = 0; i < 5; i++) {
+    const tok = (await signup(s, { email: `pres${i}@example.com`, name: `Pres Member${i}` })).body.token;
+    assert.equal((await s.call("POST", "/api/me/presence", { seconds: 60, view: "home", platform: "web" }, tok)).status, 200);
+  }
+  const A = await s.adminToken();
+  const real = fs.readFileSync; let reads = 0;
+  fs.readFileSync = function (p, ...rest) { if (typeof p === "string" && path.basename(p) === "presence.json") reads++; return real.call(this, p, ...rest); };
+  let r; try { r = await s.call("GET", "/api/admin/clients", undefined, A); } finally { fs.readFileSync = real; }
+  assert.equal(r.status, 200); assert.equal(r.body.length, 5);
+  assert.equal(reads, 1, "one read for the whole list");
+  assert.deepEqual(r.body.map((x) => x.minutes30), [1, 1, 1, 1, 1], "each row still has its own minutes");
+});
