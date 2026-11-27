@@ -1803,7 +1803,7 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   const app = createApp(cfg);
   const server = http.createServer(app);
-  const rt = createRealtime(server, cfg, { findClient: app.get("findClient") });
+  const rt = createRealtime(server, cfg, { findClient: app.get("findClient"), logger });
   app.set("rt", rt);
   rt.adminNs.on("connection", (s) => app.get("telehealth").staffJoin(s));   // video visits: waiting room and admit
   rt.memberNs.on("connection", (s) => app.get("telehealth").patientJoin(s)); // video visits: knock and call set-up

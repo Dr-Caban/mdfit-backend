@@ -557,9 +557,11 @@ Conventions: errors are `{ error: string }`; validation failures 400; `Validatio
 | `/member` | `new_message` | `{ from:"doctor", at }` | room `client:<id>` | admin reply / broadcast |
 | `/member` | `message_reaction` | `{ id }` | that client | reaction |
 | `/member`, `/public` | `slots_changed` | `{ date }` | all sockets in both namespaces | booking created/cancelled, consult scheduled, calendar watcher |
-| `/member` (inbound) | `viewing` | page string (≤60) | server | member app reports current page → shown in `/api/admin/online` |
+| `/member` (inbound) | `viewing` | page string (≤60; anything that is not a string is ignored) | server | member app reports current page → shown in `/api/admin/online` |
 
 Online tracking: `onlineMembers` (socket id → `{id,name,since,page}`) and `onlinePages` (public sockets) in memory; `onlineStats()` feeds `GET /api/admin/online`. Single-process only (no Redis adapter).
+
+Inbound messages are never trusted (`guard()` in `lib/realtime.js`): every handler on a connection runs inside a catch, so one that throws or rejects is logged (`socket_handler_failed`, a warning) and dropped instead of stopping the server. Member connections may send 100 messages per 10 s and visitor (`/public`) connections 20; the rest are dropped (`socket_rate_limited`, logged once a window). Staff connections are not limited. Video-visit ids from a browser are used only when they are strings (`idOf` in `lib/telehealth.js`), and an invited member comes in on the screen that invited them (or another screen of the same account), else waits for Admit.
 
 ---
 
@@ -641,7 +643,7 @@ File per collection `DATA_DIR/<name>.json`. All lists are full-file read/modify/
 - Customer per client (`stripeCustomerId`, metadata `clientId`). Tier Price looked up by `lookup_key = mdfit_tier_<tier>_<cents>_monthly` (Product `MD Fit <tier name>`). Review coupon id `mdfit-review-<pct>` (`percent_off`, `duration:"once"`).
 - Protocol quotes (`protocolQuote`, base = `(withEval ? evalRate : 0) + rate × n`): gold = base × (1 − gold%) one payment; silver = base × (1 − silver%) in `silverPayments` installments; ext12 = base × (1 + ext12%) in 12; ext24 = base × (1 + ext24%) in 24; payg (Bronze) = one visit at `rate`. Defaults gold 20, silver 0 (3 payments), ext12 5, ext24 10, packageSizes [6,12,24], guaranteeMin 12. Installments are subscriptions ended by a `subscriptionSchedule` with `end_behavior:"cancel"` after N months.
 - `ui: "embedded"` → `ui_mode: "embedded_page"` with `return_url` carrying `session_id={CHECKOUT_SESSION_ID}`; else hosted (`url`). `integration_identifier` prefixes `mdfit_membership_`, `mdfit_protocol_`, `mdfit_installments_`, `mdfit_service_`.
-- Accountability credit (`invoice.created` on `member` tier): −$1 per active day (workout or pain log day) in the billing period, capped at invoice amount; threshold 20 days = free month; `GET /api/me/accountability` previews it.
+- Accountability credit (`invoice.created` on the accountability tier): $1 per active day (workout or pain log day) in the billing period, up to 20, never below the tier's floor; `GET /api/me/accountability` previews it. The credit is worked out from the membership's own line on the invoice (the line of that subscription that is not a proration), so the membership comes to what the app shows and any other line (an add-on, a proration) is charged or credited in full; when that line cannot be told apart, the plain $1 a day is credited. One credit per invoice (Stripe idempotency key `mdfit_acct_credit_<invoice id>`); if Stripe cannot be reached the webhook answers 500 so Stripe sends the event again, and any other failure is logged as an error (`accountability_credit_failed`). The same event delivered again while the first delivery is still being handled is answered 409, so Stripe retries it later.
 - Idempotency: `stripeEvents` keeps last 1,000 event ids; duplicate → `{received, duplicate:true}`.
 
 ### Booking (built-in scheduler, `server.js`)
