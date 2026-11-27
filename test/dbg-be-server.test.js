@@ -442,15 +442,17 @@ test("video visits: the ledger names the staff member, the owner or the member w
   desk.fire("tele_end", { clientId: "lee2" });
   assert.deepEqual([...last(), why()], ["telehealth.end", "admin:desk@example.com", "lee2", "removed"]);
 
-  // The owner's connection carries no email of its own: the owner's sign-in email is used. Here the owner's screen is
-  // the first one connected, so it becomes the host when the front desk's guest arrives: that arrival is the guest's
-  // entry, not the owner's, who pressed nothing.
+  // The owner's connection carries no email of its own: the owner's sign-in email is used. The owner invites a guest,
+  // so the guest comes in on the owner's screen (the screen that invited them, not merely the first one connected):
+  // that arrival is the guest's entry, not the owner's, who pressed no Admit.
   tele = room();
-  const owner = conn(), desk2 = conn({ staffEmail: "desk@example.com", permissions: ["scheduling"] }), kim = conn({ clientId: "kim3" }), ana = conn({ clientId: "ana4" });
-  tele.staffJoin(owner); tele.staffJoin(desk2); tele.patientJoin(kim); tele.patientJoin(ana);
-  desk2.fire("tele_invite", { clientId: "kim3" }); await new Promise((r) => setTimeout(r, 5));
-  assert.deepEqual(last(), ["telehealth.invite", "admin:desk@example.com", "kim3"]);
+  const desk2 = conn({ staffEmail: "desk@example.com", permissions: ["scheduling"] }), owner = conn(), kim = conn({ clientId: "kim3" }), ana = conn({ clientId: "ana4" });
+  tele.staffJoin(desk2); tele.staffJoin(owner); tele.patientJoin(kim); tele.patientJoin(ana);
+  owner.fire("tele_invite", { clientId: "kim3" }); await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(last(), ["telehealth.invite", `admin:${OWNER}`, "kim3"]);
   kim.fire("tele_knock");
+  assert.equal(owner.got.some((x) => x.event === "tele_started"), true, "on the inviting owner's screen");
+  assert.equal(desk2.got.some((x) => x.event === "tele_started"), false, "not on the front desk's, though it connected first");
   assert.deepEqual(last(), ["telehealth.admit", "client:kim3", "kim3"]);
   ana.fire("tele_knock"); owner.fire("tele_admit", { clientId: "ana4" });
   assert.deepEqual(last(), ["telehealth.admit", `admin:${OWNER}`, "ana4"]);

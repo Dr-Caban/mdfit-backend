@@ -324,3 +324,36 @@ test("asking to speak: a viewer asks, the host sees it and admits them, and thei
   assert.equal(doc.count("tele_asked"), before);
   assert.ok(audit.rows.some((r) => r.action === "telehealth.ask") && audit.rows.some((r) => r.action === "telehealth.dock" && r.meta.asked));
 });
+
+test("an invited person comes in on the screen that invited them, not whichever screen connected first", async () => {
+  const audit = { rows: [], record(e) { this.rows.push(e); } };
+  const tele = createTelehealth({ audit, ownerEmail: "owner@example.com", now: () => 1000, describe: (id) => ({ name: id === "pat1" ? "Pat Doe" : "Lee Park" }),
+    invite: async (id) => ({ name: id === "pat1" ? "Pat Doe" : "Lee Park" }) });
+  const tick = () => new Promise((r) => setImmediate(r));
+  // The front desk's screen opened first, the owner's second. The owner invites Pat; Pat arrives.
+  const desk = conn(), doc = conn(), pat = conn("pat1"), lee = conn("lee2");
+  desk.staffEmail = "desk@example.com"; desk.permissions = ["clients", "scheduling"];
+  tele.staffJoin(desk); tele.staffJoin(doc); tele.patientJoin(pat); tele.patientJoin(lee);
+  doc.fire("tele_invite", { clientId: "pat1" }); await tick();
+  assert.equal(JSON.stringify(desk.last("tele_waiting").data).includes("staffEmail"), false, "a screen is never sent to other screens");
+  pat.fire("tele_knock");
+  assert.equal(doc.last("tele_started").data.clientId, "pat1", "on the owner's screen, who invited them");
+  assert.equal(desk.last("tele_started"), undefined, "not on the front desk's");
+  doc.fire("tele_end");
+  assert.equal(pat.last("tele_ended").data.why, "ended", "and the person who invited them can end it");
+
+  // The inviting screen has closed: the person waits to be admitted rather than being handed to another account
+  const desk2 = conn(), doc2 = conn(), kim = conn("pat1");
+  desk2.staffEmail = "desk@example.com"; desk2.permissions = ["scheduling"];
+  const tele2 = createTelehealth({ audit, ownerEmail: "owner@example.com", now: () => 1000, describe: () => ({ name: "Pat Doe" }), invite: async () => ({ name: "Pat Doe" }) });
+  tele2.staffJoin(desk2); tele2.staffJoin(doc2); tele2.patientJoin(kim);
+  doc2.fire("tele_invite", { clientId: "pat1" }); await tick();
+  doc2.fire("disconnect");
+  kim.fire("tele_knock");
+  assert.equal(kim.last("tele_admitted"), undefined, "not let in on the front desk's screen");
+  assert.deepEqual(desk2.last("tele_waiting").data.waiting.map((w) => w.clientId), ["pat1"], "waiting, so any screen can admit them");
+  // ...but a second screen signed in to the inviting account does take them
+  const doc3 = conn(); tele2.staffJoin(doc3);
+  kim.fire("tele_leave"); kim.fire("tele_knock");
+  assert.equal(doc3.last("tele_started").data.clientId, "pat1");
+});

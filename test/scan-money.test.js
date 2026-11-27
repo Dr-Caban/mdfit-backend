@@ -603,6 +603,68 @@ test("8b. the accountability credit is worked out from the invoice's own amount,
   assert.deepEqual(items.map(([id, credit]) => [id, ({ in_old: 3000, in_new: 2995, in_bal: 2995 })[id] + credit]), [["in_old", 1000], ["in_new", 1000], ["in_bal", 1000]], "each invoice comes to exactly the $10.00 the app shows");
 });
 
+test("8c. the accountability credit is for the membership's own line; other lines are charged as they are; one credit per invoice; a failed credit is tried again", async (t) => {
+  const items = [], errors = [];
+  let fail = null, slow = 0;
+  const clock = new Date("2026-11-15T14:00:05Z");
+  const stripe = { webhooks: real.webhooks, invoiceItems: { create: async (p, opts) => {
+    if (slow) await tick(slow);
+    if (fail) { const e = fail; fail = null; throw e; }
+    items.push([p.invoice, p.amount, opts && opts.idempotencyKey]); return {};
+  } } };
+  const s = await start(t, stripe, { now: () => clock });
+  const was = logger.error; logger.error = (e) => errors.push(e); t.after(() => { logger.error = was; });
+  await s.signup("Pat Doe");
+  // 12 active days in the period: the app shows $17.95 owed for the membership
+  const days = Array.from({ length: 12 }, (_, i) => ({ date: new Date(Date.UTC(2026, 9, 20 + i)).toISOString().slice(0, 10) }));
+  s.edit("pat.doe@example.com", (c) => { c.stripeCustomerId = "cus_1"; c.workouts = days; });
+  const period = { period_start: unix("2026-10-15T14:00:00Z"), period_end: unix("2026-11-15T14:00:00Z") };
+  await s.hook("customer.subscription.updated", { id: "sub_a", object: "subscription", customer: "cus_1", status: "active", metadata: { kind: "membership", tier: "accountability" }, items: { data: [{ current_period_start: period.period_start, current_period_end: period.period_end }] } });
+  const token = (await s.call("POST", "/api/clients/login", { email: "pat.doe@example.com", password: "made-up-pass-1" })).body.token;
+  assert.equal((await s.call("GET", "/api/me/accountability", undefined, token)).body.owed, 17.95);
+
+  // Lines as Stripe sends them now (parent.subscription_item_details), and in the older shape (type "subscription")
+  const sub = (amount, extra = {}) => ({ amount, parent: { type: "subscription_item_details", subscription_item_details: { subscription: "sub_a", subscription_item: "si_1", proration: false, ...extra } } });
+  const item = (amount, proration = false) => ({ amount, parent: { type: "invoice_item_details", invoice_item_details: { invoice_item: "ii_1", proration } } });
+  const invoice = (id, lines) => ({ id, object: "invoice", customer: "cus_1", total: lines.reduce((n, l) => n + l.amount, 0), lines: { object: "list", data: lines, has_more: false }, ...period, parent: { subscription_details: { subscription: "sub_a" } } });
+  const cases = {
+    in_one: [sub(2995)],                                   // the membership alone
+    in_addon: [sub(2995), item(1500)],                      // a $15 add-on charged on the same invoice
+    in_up: [sub(2995), sub(500, { proration: true })],      // a $5 upgrade proration
+    in_down: [sub(2995), sub(-1000, { proration: true })],  // a $10 proration credit owed to the member
+    in_older: [{ amount: 2995, type: "subscription", subscription: "sub_a", proration: false, price: { lookup_key: "mdfit_tier_accountability_2995_monthly", metadata: { tier: "accountability" } } },
+      { amount: 1500, type: "subscription", subscription: "sub_a", proration: false, price: { lookup_key: "mdfit_addon_coaching", metadata: {} } }],
+    in_unclear: [sub(2995), sub(1500)]                      // two plain lines that cannot be told apart: $1 a day, never more
+  };
+  for (const [id, lines] of Object.entries(cases)) assert.equal((await s.hook("invoice.created", invoice(id, lines))).status, 200, id);
+  const pays = Object.fromEntries(items.map(([id, credit]) => [id, cases[id].reduce((n, l) => n + l.amount, 0) + credit]));
+  assert.deepEqual(pays, { in_one: 1795, in_addon: 3295, in_up: 2295, in_down: 795, in_older: 3295, in_unclear: 3295 },
+    "the membership comes to the $17.95 the app shows; the add-on and prorations are charged or credited in full");
+  assert.ok(items.every(([id, , key]) => key === "mdfit_acct_credit_" + id), "every credit carries a key of its invoice, so Stripe makes it once");
+
+  // The same event delivered twice at once: one credit; the second delivery is asked to come again, and is then a duplicate
+  items.length = 0; slow = 80;
+  const both = await Promise.all([s.hook("invoice.created", invoice("in_dup", [sub(2995)]), "evt_dup"), s.hook("invoice.created", invoice("in_dup", [sub(2995)]), "evt_dup")]);
+  slow = 0;
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 409]);
+  assert.equal(items.length, 1, "one credit");
+  assert.deepEqual((await s.hook("invoice.created", invoice("in_dup", [sub(2995)]), "evt_dup")).body, { received: true, duplicate: true });
+
+  // Stripe could not be reached: Stripe is told to send the event again, and the next delivery gives the credit
+  items.length = 0;
+  fail = Object.assign(new Error("An error occurred with our connection to Stripe."), { type: "StripeConnectionError" });
+  assert.equal((await s.hook("invoice.created", invoice("in_retry", [sub(2995)]), "evt_retry")).status, 500);
+  assert.equal(items.length, 0);
+  assert.equal((await s.hook("invoice.created", invoice("in_retry", [sub(2995)]), "evt_retry")).status, 200);
+  assert.deepEqual(items.map(([id, credit]) => [id, credit]), [["in_retry", -1200]]);
+
+  // A refusal that will not change by trying again: no retry loop, but an error the review sees
+  errors.length = 0;
+  fail = Object.assign(new Error("This invoice is no longer a draft."), { type: "StripeInvalidRequestError", statusCode: 400 });
+  assert.equal((await s.hook("invoice.created", invoice("in_final", [sub(2995)]), "evt_final")).status, 200);
+  assert.ok(errors.includes("accountability_credit_failed"), "logged as an error, not a warning");
+});
+
 test("9. the member's calendar and its feed put a payment on the clinic's day, evenings included", async (t) => {
   const { mountMemberCalendar } = require("../lib/member-calendar");
   const { mountPayments } = require("../lib/payments");
