@@ -327,6 +327,23 @@ test("guide AI answers: off until the owner switches them on, and only ever with
   assert.deepEqual(rows.map((e) => e.meta).sort((a, b) => Number(a.on) - Number(b.on)), [{ on: false, host: m.host, model: "small-one" }, { on: true, host: m.host, model: "small-one" }]);
 });
 
+test("guide AI answers: the last lines of the chat go with a follow-up, without the member's name, and are kept nowhere", async (t) => {
+  const MARK = "ZZEARLIERLINE";
+  const m = await model(() => ({ content: '{"say":"Here is another: why did the foam roller give advice? It just rolls with it.","places":[],"mood":"cheer"}' })); t.after(m.close);
+  const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
+  const A = await s.adminToken(), zed = await s.signup("Zed Quillon");
+  await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);
+  const ask = (body) => s.call("POST", "/api/me/guide/ask", body, zed.token);
+  const r = await ask({ text: "Yes", history: [{ who: "me", text: `Tell me a joke, Zed here ${MARK}` }, { who: "solomon", text: "Why did the scarecrow become a physiotherapist? Want another one?" }] });
+  assert.equal(r.status, 200); assert.equal(r.body.ok, true);
+  const user = m.seen[0].body.messages[1].content;
+  assert.match(user, /Member: Tell me a joke/); assert.match(user, /Solomon: Why did the scarecrow/); assert.match(user, /Their new message: Yes$/);
+  assert.equal(/Zed|Quillon/.test(JSON.stringify(m.seen[0].body)), false, "the member's name did not leave");
+  // Anything else in place of the lines is ignored, never refused: the question still goes, alone
+  for (const history of ["text", 7, { who: "me" }, null]) { assert.equal((await ask({ text: "Yes", history })).status, 200); assert.equal(m.seen.at(-1).body.messages[1].content, "Yes"); }
+  assert.equal(String(s.everything()).includes(MARK), false, "nothing typed reached the disk");
+});
+
 test("guide AI answers: the sentence goes without the member's name, the tokens it used are counted, and nothing typed or said is kept", async (t) => {
   const MARK = "ZZMARKER", SAID = "YYSAIDMARK";
   const m = await model((n) => (n === 3 ? { status: 500 } : n === 4 ? { content: "Sure thing!" } : { content: `{"say":"I understand, that can be frustrating. ${SAID}","places":["pain","book","nowhere"],"area":"Knee"}` })); t.after(m.close);
