@@ -356,4 +356,19 @@ test("an invited person comes in on the screen that invited them, not whichever 
   const doc3 = conn(); tele2.staffJoin(doc3);
   kim.fire("tele_leave"); kim.fire("tele_knock");
   assert.equal(doc3.last("tele_started").data.clientId, "pat1");
+
+  // The inviting screen's network dropped and it came back as a new connection while the server still holds the old
+  // one (up to 45 s): the person comes in on the screen that came back, not on the dead one, and not on the desk's
+  const desk4 = conn(), gone = conn(), pat4 = conn("pat1");
+  desk4.staffEmail = "desk@example.com"; desk4.permissions = ["scheduling"];
+  const tele3 = createTelehealth({ audit, ownerEmail: "owner@example.com", now: () => 1000, describe: () => ({ name: "Pat Doe" }), invite: async () => ({ name: "Pat Doe" }) });
+  tele3.staffJoin(desk4); tele3.staffJoin(gone); tele3.patientJoin(pat4);
+  gone.fire("tele_invite", { clientId: "pat1" }); await tick();
+  const back = conn(); tele3.staffJoin(back);
+  pat4.fire("tele_knock");
+  assert.equal(back.last("tele_started").data.clientId, "pat1", "on the screen that came back");
+  assert.equal(gone.last("tele_started"), undefined, "not on the connection that is no longer there");
+  assert.equal(desk4.last("tele_started"), undefined, "not on another account's");
+  back.fire("tele_end");
+  assert.equal(pat4.last("tele_ended").data.why, "ended", "and that screen can end the visit");
 });
