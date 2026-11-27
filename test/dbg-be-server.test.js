@@ -331,6 +331,10 @@ test("calendar: one calendar reporting its own error: nothing is kept, a time ta
   // a time is taken on the second calendar meanwhile; it answers again: the very next check sees it
   g.state.google = "up"; g.state.busy["second@example.com"].push({ start: "2026-11-17T15:00:00Z", end: "2026-11-17T16:00:00Z" });
   assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")).sort(), ["google-2 2026-11-17T15:00", "google-2 2026-11-17T19:00"]);
+  // that clean read resets the log: the next refusal, seconds later, is written at once
+  cs.clear(); g.state.google = "second-refused"; g.clock.t += 5e3;
+  const again = await logged(() => cs.busy("2026-11-17", "2026-11-17"));
+  assert.equal(again.filter((l) => l.msg === "gcal_busy_partial").length, 1, "the first refusal after a clean read is logged");
 });
 
 test("calendar: each source falls back on its own (one Google calendar of two, the SimplePractice feed)", async () => {

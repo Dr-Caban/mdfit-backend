@@ -522,3 +522,16 @@ test("guide: Insights counts which looks members chose and how often each switch
   assert.ok(!/Fay|Gus|Hal|example\.com/.test(JSON.stringify(r.body)), "counts only");
   assert.equal((await s.call("GET", "/api/admin/analytics/looks", undefined, fay.token)).status, 401);
 });
+
+test("guide AI answers: a message the model flags as a crisis gets the app's crisis answer and costs the member nothing", async (t) => {
+  const m = await model(() => ({ content: '{"say":"I am really glad you told me.","places":[],"area":"","urgent":true}' })); t.after(m.close);
+  const s = await start({ scribe: { url: m.url, key: "k_made_up", model: "small-one" } }); t.after(s.close);
+  const A = await s.adminToken(), zed = await s.signup("Zed Quillon");
+  await s.call("PUT", "/api/admin/guide/settings", { ai: true }, A);
+  const before = (await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used;
+  // words the app's list leaves to the assistant: it reads them and flags them
+  const r = await s.call("POST", "/api/me/guide/ask", { text: "tonight's the night, goodbye" }, zed.token);
+  assert.deepEqual(r.body, { ok: true, urgent: true });
+  assert.equal(m.seen.length, 1, "the model was asked");
+  assert.equal((await s.call("GET", "/api/me/guide", undefined, zed.token)).body.used, before, "not charged to the member");
+});

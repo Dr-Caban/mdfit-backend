@@ -18,7 +18,7 @@ async function model(reply) {
 const quiet = { warn() {} };
 // The parts of an answer most tests look at (suggestions and tokens have their own tests below)
 const core = (o) => (o && o.say ? { say: o.say, places: o.places, area: o.area, model: o.model } : o);
-const NONE = { programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false };
+const NONE = { programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false, urgent: false };
 
 test("guide AI: only a service that signs a business associate agreement is ever used", () => {
   assert.equal(hostAllowed("api.openai.com"), true);
@@ -117,7 +117,7 @@ test("guide AI: suggestions are read strictly too: catalog ids only, three progr
   const got = read(JSON.stringify({ say: "Ok.", places: ["pain"], area: "", programs: ["p1", "x", "p1", "p2", "p3", "p4"], videos: ["v5", "v1", "zz", "v2", "v3", "v4"], tip: "**Drink** water  through the day." + " more".repeat(100) }), ["pain"], cat);
   assert.deepEqual(got.programs, ["p1", "p2", "p3"]); assert.deepEqual(got.videos, ["v5", "v1", "v2", "v3"]);
   assert.match(got.tip, /^Drink water through the day\. more/); assert.ok(got.tip.length <= 300);
-  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false });
+  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false, urgent: false });
 });
 
 test("guide AI: his mood and the verse flag are read strictly", () => {
@@ -170,7 +170,16 @@ test("guide AI: the model is asked whether a message is outside Solomon's subjec
   for (const v of ["true", "yes", 1, null, {}, [true]]) assert.equal(read(JSON.stringify({ say: "Ok.", outside: v }), [], cat).outside, false, JSON.stringify(v));
   assert.equal(read('{"say":"Ok."}', [], cat).outside, false, "left out is false");
   const sys = system([{ id: "pain", label: "Open the pain tool" }]);
-  assert.match(sys, /"verse": boolean, "outside": boolean\}/, "the flag is part of the reply the model is asked for");
+  assert.match(sys, /"verse": boolean, "outside": boolean, "urgent": boolean\}/, "the flag is part of the reply the model is asked for");
   assert.match(sys, /plainly outside all of this [^\n]*: set outside to true,/); assert.match(sys, /Otherwise outside is false\./);
   assert.match(sys, /without the words "I can only help with"/, "the wording rule is unchanged");
+});
+
+test("guide AI: the model can flag a crisis the words did not catch, and only a real true counts", () => {
+  const cat = { programs: [], videos: [], guides: [] };
+  assert.equal(read(JSON.stringify({ say: "I'm really glad you told me.", urgent: true }), [], cat).urgent, true);
+  for (const v of ["true", "yes", 1, null, {}, [true]]) assert.equal(read(JSON.stringify({ say: "Ok.", urgent: v }), [], cat).urgent, false, JSON.stringify(v));
+  const sys = system([{ id: "pain", label: "Open the pain tool" }]);
+  assert.match(sys, /"outside": boolean, "urgent": boolean\}/, "the flag is part of the reply the model is asked for");
+  assert.match(sys, /set urgent to true, say one short caring sentence/); assert.match(sys, /When in doubt, set urgent to true\./);
 });
