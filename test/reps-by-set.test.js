@@ -23,6 +23,22 @@ test("customInput: per-set reps are kept, checked and folded when all equal", ()
   assert.throws(() => customInput({ name: "x", exercises: [{ id: "1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", sets: 2, repsBySet: "12,10" }] }), /each of its 2 sets/);
 });
 
+test("customInput: a field sent as an object or a list is refused, never a crash", () => {
+  const { ValidationError } = require("../lib/validate");
+  const ID = "1hNEZKFQvc2G0B8nQDJPbrx8JhWnBScuv", odd = { toString: 1 }, ok = { id: ID, sets: 2, reps: 8 };
+  // (what the error handler answers 400 for; anything else it answers 500)
+  const refused = (body, words) => assert.throws(() => customInput(body), (e) => e instanceof ValidationError && words.test(e.message));
+  refused({ name: odd, exercises: [ok] }, /Give your workout a name/);
+  refused({ name: ["Burner"], exercises: [ok] }, /Give your workout a name/);
+  refused({ name: "x", exercises: [{ ...ok, id: odd }] }, /isn't in the library/);
+  refused({ name: "x", exercises: [{ ...ok, sets: odd }] }, /sets must be 1 to 10/);
+  refused({ name: "x", exercises: [{ ...ok, reps: odd }] }, /reps must be 1 to 100/);
+  refused({ name: "x", exercises: [{ ...ok, reps: [8] }] }, /reps must be 1 to 100/);
+  refused({ name: "x", exercises: [{ ...ok, repsBySet: [odd, 8] }] }, /set 1 reps must be 1 to 100/);
+  // Numbers sent as text are still taken, as before
+  assert.deepEqual(customInput({ name: "Text", exercises: [{ id: ID, sets: "3", reps: "10" }] }).exercises[0], { id: ID, sets: 3, reps: 10 });
+});
+
 test("per-set reps are saved, sent as a challenge and shared by link", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-rbs-"));
   const app = createApp({ adminEmail: "coach@example.com", adminPasswordHash: hashPassword("admin-pass-123"), sessionSecret: "s".repeat(40), dataDir, origins: ["*"], tz: "America/New_York", now: () => new Date(), siteUrl: "https://mdfit.example.com" });
