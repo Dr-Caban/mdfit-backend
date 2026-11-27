@@ -588,12 +588,19 @@ test("8b. the accountability credit is worked out from the invoice's own amount,
   s.edit("pat.doe@example.com", (c) => { c.stripeCustomerId = "cus_1"; c.workouts = days; });
   const sub = { id: "sub_a", object: "subscription", customer: "cus_1", status: "active", metadata: { kind: "membership", tier: "accountability" }, items: { data: [{ current_period_start: unix("2026-10-15T14:00:00Z"), current_period_end: unix("2026-11-15T14:00:00Z") }] } };
   assert.equal((await s.hook("customer.subscription.updated", sub)).status, 200);
-  const invoice = (id, due) => ({ id, object: "invoice", customer: "cus_1", amount_due: due, period_start: unix("2026-10-15T14:00:00Z"), period_end: unix("2026-11-15T14:00:00Z"), parent: { subscription_details: { subscription: "sub_a" } } });
+  // total: the invoice before any account credit; amount_due: after it (Stripe's own fields)
+  const invoice = (id, total, due = total) => ({ id, object: "invoice", customer: "cus_1", total, amount_due: due, period_start: unix("2026-10-15T14:00:00Z"), period_end: unix("2026-11-15T14:00:00Z"), parent: { subscription_details: { subscription: "sub_a" } } });
+  const promised = (await s.call("GET", "/api/me/accountability", undefined, (await s.call("POST", "/api/clients/login", { email: "pat.doe@example.com", password: "made-up-pass-1" })).body.token)).body.owed;
+  assert.equal(promised, 10, "the app promises $10 for 20 or more active days");
   // a member still on the old Stripe price ($30) and one on the current price ($29.95) both pay the $10 floor
   await s.hook("invoice.created", invoice("in_old", 3000));
   await s.hook("invoice.created", invoice("in_new", 2995));
-  assert.deepEqual(items, [["in_old", -2000], ["in_new", -1995]]);
-  assert.deepEqual(items.map(([id, credit]) => [id, ({ in_old: 3000, in_new: 2995 })[id] + credit]), [["in_old", 1000], ["in_new", 1000]], "both pay exactly $10.00");
+  // a member holding $5 of account credit: the floor is worked out before that credit, so the credit still counts
+  await s.hook("invoice.created", invoice("in_bal", 2995, 2495));
+  // a month a promotion code already made free gets no credit (it would be paid out as account credit)
+  await s.hook("invoice.created", invoice("in_free", 0));
+  assert.deepEqual(items, [["in_old", -2000], ["in_new", -1995], ["in_bal", -1995]]);
+  assert.deepEqual(items.map(([id, credit]) => [id, ({ in_old: 3000, in_new: 2995, in_bal: 2995 })[id] + credit]), [["in_old", 1000], ["in_new", 1000], ["in_bal", 1000]], "each invoice comes to exactly the $10.00 the app shows");
 });
 
 test("9. the member's calendar and its feed put a payment on the clinic's day, evenings included", async (t) => {
