@@ -298,18 +298,21 @@ test("calendar: with no good read yet, a failed one still counts as no busy time
   assert.equal(g.state.asked, asked + 1, "not kept either: the next call asks again");
 });
 
-test("calendar: an outage is written to the log once a minute, not on every call; every call still asks Google", async () => {
+test("calendar: the same outage is written to the log once every ten minutes, not on every call; every call still asks Google", async () => {
   const g = standIn(), cs = g.make();
   await cs.busy("2026-11-12", "2026-11-30"); cs.clear();
   g.state.google = "down";
   const asked = g.state.asked;
   const lines = await logged(async () => { for (let i = 0; i < 5; i++) { await cs.busy("2026-11-12", "2026-11-30"); g.clock.t += 5e3; } });
   assert.equal(g.state.asked, asked + 5, "asked every time");
-  assert.equal(lines.filter((l) => l.msg === "gcal_busy_failed").length, 1, "logged once in the first minute");
+  assert.equal(lines.filter((l) => l.msg === "gcal_busy_failed").length, 1, "logged once, not on each call");
   assert.equal(cs.status().lastError, "fetch failed", "and staff see it every time");
-  g.clock.t += 60e3;
+  g.clock.t += 5 * 60e3;
+  const mid = await logged(() => cs.busy("2026-11-12", "2026-11-30"));
+  assert.equal(mid.filter((l) => l.msg === "gcal_busy_failed").length, 0, "not again five minutes in");
+  g.clock.t += 6 * 60e3;
   const later = await logged(() => cs.busy("2026-11-12", "2026-11-30"));
-  assert.equal(later.filter((l) => l.msg === "gcal_busy_failed").length, 1, "and again once the minute is over");
+  assert.equal(later.filter((l) => l.msg === "gcal_busy_failed").length, 1, "and again once ten minutes have passed");
 });
 
 test("calendar: a time added in Google after the last good read is refused the moment Google answers again", async () => {
@@ -321,12 +324,12 @@ test("calendar: a time added in Google after the last good read is refused the m
   assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), ["google 2026-11-17T14:00"], "the booking check reads Google fresh");
 });
 
-test("calendar: one calendar reporting its own error: nothing is kept, a time taken there is refused once it answers, and the log line is written once a minute", async () => {
+test("calendar: one calendar reporting its own error: nothing is kept, a time taken there is refused once it answers, and the same log line is written once every ten minutes", async () => {
   const g = standIn(), cs = g.make({ calendarId: "dr@example.com, second@example.com" });
   assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), ["google-2 2026-11-17T19:00"]); cs.clear();
   g.state.google = "second-refused";
   const lines = await logged(async () => { for (let i = 0; i < 4; i++) { await cs.busy("2026-11-17", "2026-11-17"); g.clock.t += 5e3; } });
-  assert.equal(lines.filter((l) => l.msg === "gcal_busy_partial").length, 1, "logged once in the minute");
+  assert.equal(lines.filter((l) => l.msg === "gcal_busy_partial").length, 1, "logged once, not on each view");
   assert.match(cs.status().lastError, /calendar 2: backendError/, "staff see it on every call");
   // a time is taken on the second calendar meanwhile; it answers again: the very next check sees it
   g.state.google = "up"; g.state.busy["second@example.com"].push({ start: "2026-11-17T15:00:00Z", end: "2026-11-17T16:00:00Z" });
