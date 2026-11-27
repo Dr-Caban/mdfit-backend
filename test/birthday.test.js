@@ -191,6 +191,12 @@ test("birthday: staff views do not carry it, and a date of birth from the clinic
   }
   const kept = s.stored().find((c) => c.id === imp.client.id);
   assert.equal(kept.dob, "1970-03-04"); assert.equal(kept.dobBy, undefined, "still the clinic's, never turned into the member's");
+  // a clinic date a birthday could not use (before 1900) is still shown and can be sent back unchanged
+  const l2 = s.stored(); l2.find((c) => c.id === imp.client.id).dob = "1890-01-01"; fs.writeFileSync(s.file, JSON.stringify(l2));
+  assert.equal((await s.call("GET", "/api/me", undefined, imp.token)).body.client.dob, "1890-01-01");
+  assert.equal((await s.call("PUT", "/api/me", { dob: "1890-01-01" }, imp.token)).status, 200);
+  assert.equal((await s.call("PUT", "/api/me", { dob: "1990-01-01" }, imp.token)).status, 409);
+  l2.find((c) => c.id === imp.client.id).dob = "1970-03-04"; fs.writeFileSync(s.file, JSON.stringify(l2));
   // and it is never greeted
   s.clock.now = new Date("2027-03-04T15:00:00Z");
   assert.equal(s.run(), 0);

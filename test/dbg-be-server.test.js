@@ -243,7 +243,7 @@ function standIn() {
     }
     return json(404, {});
   };
-  // the calendar's own clock: the three-minute cache and the three-minute pause after an outage run on it
+  // the calendar's own clock (its three-minute cache and the once-a-minute outage log line run on it)
   const clock = { t: Date.parse("2026-11-12T15:00:00Z") };
   const make = (over = {}) => createCalSync({ serviceAccount: sa, calendarId: "dr@example.com", tz: "America/New_York", zonedToUtc, fetchImpl, logger, now: () => new Date(clock.t), ...over });
   return { state, make, clock };
@@ -266,16 +266,11 @@ test("calendar: a read that fails is answered with the last good one for those d
   // dates only partly covered by a good read: what is known for them is still used
   assert.deepEqual(times(await cs.busy("2026-11-14", "2026-12-20")), ["google 2026-11-16T15:00"]);
 
-  // for three minutes after the outage Google is left alone and the last good read answers (so a calendar that is
-  // down is asked, and logged, about once every three minutes, not on every page view)
+  // the failure was not kept: the same question goes to Google again, and its new answer is used at once
   const asked = g.state.asked;
   g.state.google = "up"; g.state.busy["dr@example.com"] = [{ start: "2026-11-16T18:00:00Z", end: "2026-11-16T19:00:00Z" }];
-  assert.deepEqual(times(await cs.busy("2026-11-12", "2026-11-30")), ["google 2026-11-16T15:00"], "still the last good read");
-  assert.equal(g.state.asked, asked, "not asked during the pause");
-  // the failure itself was not kept: once the pause is over the same question goes to Google, and its answer is used at once
-  g.clock.t += 181e3;
   const after = await cs.busy("2026-11-12", "2026-11-30");
-  assert.equal(g.state.asked, asked + 1, "asked again once the three minutes are over");
+  assert.equal(g.state.asked, asked + 1, "asked again without waiting for the three minutes");
   assert.deepEqual(times(after), ["google 2026-11-16T18:00"]);
   assert.equal(cs.status().lastError, "");
   await cs.busy("2026-11-12", "2026-11-30");
@@ -287,7 +282,6 @@ test("calendar: a read that fails is answered with the last good one for those d
   // the one day a booking checks is answered from the newest read that covers it: here a one-day read that saw an
   // event the wider read before it had not
   g.state.google = "up"; g.state.busy["dr@example.com"].push({ start: "2026-11-20T15:00:00Z", end: "2026-11-20T16:00:00Z" });
-  g.clock.t += 181e3; // past the pause the failure above started
   assert.deepEqual(times(await cs.busy("2026-11-20", "2026-11-20")), ["google 2026-11-20T15:00"]);
   cs.clear(); g.state.google = "down";
   assert.deepEqual(times(await cs.busy("2026-11-20", "2026-11-20")), ["google 2026-11-20T15:00"]);
@@ -300,11 +294,31 @@ test("calendar: with no good read yet, a failed one still counts as no busy time
   assert.deepEqual(await cs.busy("2026-11-12", "2026-11-30"), []);
   assert.equal(cs.status().lastError, "fetch failed");
   const asked = g.state.asked;
-  assert.deepEqual(await cs.busy("2026-11-12", "2026-11-30"), []);
-  assert.equal(g.state.asked, asked, "left alone for three minutes after the outage");
-  g.clock.t += 181e3;
   await cs.busy("2026-11-12", "2026-11-30");
-  assert.equal(g.state.asked, asked + 1, "not kept: once the pause is over the next call asks again");
+  assert.equal(g.state.asked, asked + 1, "not kept either: the next call asks again");
+});
+
+test("calendar: an outage is written to the log once a minute, not on every call; every call still asks Google", async () => {
+  const g = standIn(), cs = g.make();
+  await cs.busy("2026-11-12", "2026-11-30"); cs.clear();
+  g.state.google = "down";
+  const asked = g.state.asked;
+  const lines = await logged(async () => { for (let i = 0; i < 5; i++) { await cs.busy("2026-11-12", "2026-11-30"); g.clock.t += 5e3; } });
+  assert.equal(g.state.asked, asked + 5, "asked every time");
+  assert.equal(lines.filter((l) => l.msg === "gcal_busy_failed").length, 1, "logged once in the first minute");
+  assert.equal(cs.status().lastError, "fetch failed", "and staff see it every time");
+  g.clock.t += 60e3;
+  const later = await logged(() => cs.busy("2026-11-12", "2026-11-30"));
+  assert.equal(later.filter((l) => l.msg === "gcal_busy_failed").length, 1, "and again once the minute is over");
+});
+
+test("calendar: a time added in Google after the last good read is refused the moment Google answers again", async () => {
+  const g = standIn(), cs = g.make();
+  assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), []); cs.clear();
+  g.state.google = "down"; assert.deepEqual(await cs.busy("2026-11-17", "2026-11-17"), []); // one failed read
+  // Google is back and an event has been added on that day since the last good read
+  g.state.google = "up"; g.state.busy["dr@example.com"].push({ start: "2026-11-17T14:00:00Z", end: "2026-11-17T15:00:00Z" });
+  assert.deepEqual(times(await cs.busy("2026-11-17", "2026-11-17")), ["google 2026-11-17T14:00"], "the booking check reads Google fresh");
 });
 
 test("calendar: each source falls back on its own (one Google calendar of two, the SimplePractice feed)", async () => {
@@ -351,9 +365,8 @@ test("calendar: while Google cannot be read, booking pages keep the taken time h
   const A = await s.ownerToken();
   assert.equal((await s.call("GET", "/api/admin/calsync", undefined, A)).body.lastError, "fetch failed", "staff see that Google is not answering");
 
-  // Google answers again (asked once the three-minute pause after the outage is over): nothing had changed, so nothing
-  // is announced, and an open time can be booked
-  g.state.google = "up"; g.clock.t += 181e3;
+  // Google answers again: nothing had changed, so nothing is announced, and an open time can be booked
+  g.state.google = "up";
   assert.deepEqual(await watch(), []); assert.deepEqual(sent, []);
   assert.equal((await s.call("GET", "/api/admin/calsync", undefined, A)).body.lastError, "");
   assert.equal((await s.call("POST", "/api/appointments", { ...booking, time: open.slots[0] })).status, 201);

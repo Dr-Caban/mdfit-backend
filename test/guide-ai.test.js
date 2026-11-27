@@ -146,8 +146,8 @@ const CRISIS = [
 const NOT_CRISIS = ["my back is killing me", "oh god my stomach is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight",
   "breathing exercises for stress", "it is hard to stretch my hip", "I have trouble sleeping", "I want to live healthier", "my knee hurts", "where are the programs",
   // an injury, said the way people in rehab say it: pain help, not the 911 answer
-  "I hurt myself lifting yesterday", "I might hurt myself doing that", "I keep hurting myself in the gym",
-  "I don't want to live in Florida", "I don't want to be here at the gym"];
+  "I hurt myself lifting yesterday", "I might hurt myself doing that", "I keep hurting myself in the gym"];
+// (test/crisis-words.test.js has the full lists, and the sentences the words cannot tell from a crisis, which count)
 
 test("guide AI: every crisis phrase is caught and never sent, with the apostrophe a phone types too; figures of speech are not crisis words", async (t) => {
   const m = await model(() => ({ content: '{"say":"Sorry it hurts. Start with the pain tool.","places":["pain"],"area":"back"}' })); t.after(m.close);
