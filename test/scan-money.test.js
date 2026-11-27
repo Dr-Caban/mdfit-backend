@@ -772,3 +772,62 @@ test("9. the member's calendar and its feed put a payment on the clinic's day, e
     assert.match(ics, /DTSTART;VALUE=DATE:20261201\r\nDTEND;VALUE=DATE:20261202\r\nSUMMARY:MD Fit membership renews/);
   });
 });
+
+test("10. a subscription's life is kept: a plan changed in the portal, a failed payment until it is paid, a cancellation in the history, care plans behind or refunded", async (t) => {
+  const updates = [];
+  const stripe = { webhooks: real.webhooks, subscriptions: { update: async (id, p) => { updates.push([id, p.metadata && p.metadata.tier]); return {}; }, list: async () => ({ data: [] }) },
+    invoicePayments: { list: async () => ({ data: [] }) }, charges: { list: async () => ({ data: [] }), retrieve: async () => ({}) }, balanceTransactions: { list: () => ({ async *[Symbol.asyncIterator]() {} }) },
+    invoices: { retrieve: async () => ({}) }, paymentIntents: { retrieve: async () => ({}) } };
+  const s = await start(t, stripe);
+  const owner = await s.login();
+  await s.signup("Mia Member");
+  s.edit("mia.member@example.com", (c) => { c.stripeCustomerId = "cus_m"; });
+  const P = { current_period_start: unix("2026-11-05T14:00:00Z"), current_period_end: unix("2026-12-05T14:00:00Z") }; // the period running now
+  const sub = (status, tier, extra = {}) => ({ id: "sub_m", object: "subscription", customer: "cus_m", status, start_date: unix("2026-10-05T14:00:00Z"), metadata: { kind: "membership", tier: "member" },
+    items: { data: [{ ...P, price: { id: "price_" + tier, lookup_key: `mdfit_tier_${tier}_1995_monthly`, metadata: { tier } } }] }, ...extra });
+  const m = () => s.client("mia.member@example.com").membership;
+
+  await s.hook("customer.subscription.created", sub("active", "member"));
+  assert.equal(m().tier, "member"); assert.equal(m().since, "2026-10-05", "the day the subscription started, not the day the event was handled");
+  // Changed to Accountability in Stripe's billing portal: the price changes, the subscription's metadata does not
+  await s.hook("customer.subscription.updated", sub("active", "accountability"));
+  assert.equal(m().tier, "accountability", "the tier the member is billed for now");
+  assert.deepEqual(updates, [["sub_m", "accountability"]], "and the subscription's metadata is brought up to date for later invoices");
+
+  // A renewal fails: written down until it is paid
+  const inv = (id, extra = {}) => ({ id, object: "invoice", customer: "cus_m", parent: { subscription_details: { subscription: "sub_m" } }, amount_due: 2995, amount_paid: 0, ...extra });
+  await s.hook("invoice.payment_failed", inv("in_fail", { attempt_count: 1, next_payment_attempt: unix("2026-11-08T14:00:00Z") }));
+  assert.deepEqual({ ...m().lastFailure, at: undefined }, { at: undefined, invoiceId: "in_fail", amountDue: 2995, attempt: 1, nextAttempt: "2026-11-08T14:00:00.000Z" });
+  await s.hook("customer.subscription.updated", sub("past_due", "accountability"));
+  assert.equal(m().status, "past_due"); assert.equal(m().lastFailure.invoiceId, "in_fail", "kept while Stripe retries");
+  const econ = (await s.call("GET", "/api/admin/economics", undefined, owner)).body;
+  assert.equal(econ.members.pastDue, 1);
+  await s.hook("invoice.paid", inv("in_fail", { amount_paid: 2995, status: "paid" }));
+  assert.equal(m().lastFailure, undefined, "cleared once it is paid");
+  await s.hook("customer.subscription.updated", sub("active", "accountability", { cancel_at_period_end: true, canceled_at: unix("2026-11-10T14:00:00Z") }));
+  assert.equal(m().cancelAtPeriodEnd, true); assert.equal(m().canceledAt, "2026-11-10T14:00:00.000Z");
+  assert.equal((await s.call("GET", "/api/admin/economics", undefined, owner)).body.members.canceling, 1);
+  // It ends: kept in the history, then taken off
+  await s.hook("customer.subscription.deleted", sub("canceled", "accountability"));
+  const mia = s.client("mia.member@example.com");
+  assert.equal(mia.membership, null);
+  assert.deepEqual(mia.membershipHistory.map((h) => [h.tier, h.since, h.status, h.subscriptionId]), [["accountability", "2026-10-05", "canceled", "sub_m"]]);
+  const kinds = s.readJson("activity").map((e) => e.type).filter((x) => x.startsWith("subscription_")).reverse(); // (the feed is newest first)
+  assert.deepEqual(kinds, ["subscription_started", "subscription_changed", "subscription_payment_failed", "subscription_ended"]);
+
+  // A care plan in instalments: behind on one, then caught up; its status (and what it gives) does not change
+  s.edit("mia.member@example.com", (c) => { c.protocols = [{ id: "p1", subscriptionId: "sub_p", total: 2100, payments: 3, paid: 1, status: "active", invoiceIds: ["in_p1"] }]; });
+  const plan = (status) => ({ id: "sub_p", object: "subscription", customer: "cus_m", status, metadata: { kind: "protocol", protocolId: "p1" }, items: { data: [{ ...P }] } });
+  const p = () => s.client("mia.member@example.com").protocols[0];
+  await s.hook("invoice.payment_failed", { id: "in_p2", object: "invoice", customer: "cus_m", parent: { subscription_details: { subscription: "sub_p" } }, amount_due: 70000, attempt_count: 2 });
+  await s.hook("customer.subscription.updated", plan("past_due"));
+  assert.deepEqual([p().status, p().pastDue, p().lastFailure.invoiceId], ["active", true, "in_p2"]);
+  assert.equal((await s.call("GET", "/api/admin/economics", undefined, owner)).body.members.carePlans.count, 1);
+  await s.hook("customer.subscription.updated", plan("active"));
+  assert.deepEqual([p().status, p().pastDue, p().lastFailure], ["active", undefined, undefined]);
+  // Two instalments refunded from Stripe's dashboard (their charges carry no metadata): added up on the plan
+  s.writeJson("revenue", [{ id: "r2", ref: "in_p2", kind: "protocol", paymentIntent: "pi_p2", subscriptionId: "sub_p", grossCents: 70000, ts: "2026-11-05T14:00:00.000Z" },
+    { id: "r3", ref: "in_p3", kind: "protocol", paymentIntent: "pi_p3", subscriptionId: "sub_p", grossCents: 70000, ts: "2026-12-05T14:00:00.000Z" }]);
+  for (const [ch, pi] of [["ch_p2", "pi_p2"], ["ch_p3", "pi_p3"], ["ch_p2", "pi_p2"]]) await s.hook("charge.refunded", { id: ch, object: "charge", customer: "cus_m", amount: 70000, amount_refunded: 70000, refunded: true, payment_intent: pi, metadata: {} });
+  assert.deepEqual([p().refunded, p().refunds], [140000, { ch_p2: 70000, ch_p3: 70000 }], "each instalment once, however often Stripe says so");
+});

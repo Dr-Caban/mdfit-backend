@@ -52,3 +52,17 @@ test("the developer console: totals for the owner and a developer, closed to eve
   assert.equal((await s.call("GET", "/api/admin/clients", undefined, dev)).status, 403);
   assert.equal((await s.call("GET", "/api/admin/economics", undefined, dev)).status, 403);
 });
+
+test("the developer console counts only memberships that are still running", async (t) => {
+  const s = await start(); t.after(s.close);
+  const owner = await s.login("coach@example.com", "admin-pass-123");
+  for (const [name, email] of [["Ann Active", "ann.active@example.com"], ["Ed Expired", "ed.expired@example.com"], ["Hal Hand", "hal.hand@example.com"]]) await s.call("POST", "/api/clients/signup", { name, email, phone: "941-555-0100", password: "pat-pass-123" });
+  const f = path.join(s.dataDir, "clients.json"), list = JSON.parse(fs.readFileSync(f, "utf8"));
+  const set = (email, m) => { list.find((c) => c.email === email).membership = m; };
+  set("ann.active@example.com", { tier: "member", until: "2999-01-01", stripeSubscriptionId: "sub_a", status: "active" });
+  set("ed.expired@example.com", { tier: "member", until: "2020-01-01", stripeSubscriptionId: "sub_e", status: "active" });
+  set("hal.hand@example.com", { tier: "member" }); // given by hand, no end
+  fs.writeFileSync(f, JSON.stringify(list));
+  const r = await s.call("GET", "/api/admin/dev/overview?days=30", undefined, owner);
+  assert.equal(r.body.usage.accounts.members, 2, "the expired one is not counted");
+});
