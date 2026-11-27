@@ -18,7 +18,7 @@ async function model(reply) {
 const quiet = { warn() {} };
 // The parts of an answer most tests look at (suggestions and tokens have their own tests below)
 const core = (o) => (o && o.say ? { say: o.say, places: o.places, area: o.area, model: o.model } : o);
-const NONE = { programs: [], guides: [], videos: [], tip: "", mood: "", verse: false };
+const NONE = { programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false };
 
 test("guide AI: only a service that signs a business associate agreement is ever used", () => {
   assert.equal(hostAllowed("api.openai.com"), true);
@@ -117,7 +117,7 @@ test("guide AI: suggestions are read strictly too: catalog ids only, three progr
   const got = read(JSON.stringify({ say: "Ok.", places: ["pain"], area: "", programs: ["p1", "x", "p1", "p2", "p3", "p4"], videos: ["v5", "v1", "zz", "v2", "v3", "v4"], tip: "**Drink** water  through the day." + " more".repeat(100) }), ["pain"], cat);
   assert.deepEqual(got.programs, ["p1", "p2", "p3"]); assert.deepEqual(got.videos, ["v5", "v1", "v2", "v3"]);
   assert.match(got.tip, /^Drink water through the day\. more/); assert.ok(got.tip.length <= 300);
-  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "", mood: "", verse: false });
+  assert.deepEqual(read('{"say":"Ok.","programs":"p1","videos":null,"tip":7}', [], cat), { say: "Ok.", places: [], area: "", programs: [], guides: [], videos: [], tip: "", mood: "", verse: false, outside: false });
 });
 
 test("guide AI: his mood and the verse flag are read strictly", () => {
@@ -129,4 +129,44 @@ test("guide AI: his mood and the verse flag are read strictly", () => {
   const sys = system([{ id: "pain", label: "Open the pain tool" }]);
   assert.match(sys, /Conversation is part of your job/); assert.match(sys, /never quote or paraphrase scripture yourself/);
   assert.match(sys, /never diagnose/, "the clinical rules are unchanged");
+});
+
+// The crisis and emergency phrases the server stops before the model. The app keeps the same list (mdfit-guide.js).
+const CRISIS = [
+  "god I want to die", "i wanna die", "I give up, I want to end it all", "I want to end my life", "everyone would be better off dead",
+  "I don't want to live", "I don’t want to be here anymore", "i dont want to be alive", "I do not want to live like this",
+  "I want to hurt myself", "I might harm myself", "I am going to kill myself",
+  "I am struggling to breathe", "it is hard to breathe", "trouble breathing since last night", "difficulty breathing", "I can't breathe", "I can’t breathe", "I cannot breathe",
+  // whole words, not only the stem: these were missed while the list ended every entry at a word boundary
+  "I feel suicidal", "thinking about suicide", "I think I overdosed", "it was an overdose", "I am having chest pains",
+  "call 911", "this is an emergency", "chest pain", "I think it is a heart attack", "signs of a stroke", "I passed out", "she fainted", "severe bleeding"
+];
+// Figures of speech and ordinary sentences that sit close to those words
+const NOT_CRISIS = ["my back is killing me", "oh god my stomach is killing me", "I am dying to try the new program", "this workout is killer", "I want to diet and lose weight",
+  "breathing exercises for stress", "it is hard to stretch my hip", "I have trouble sleeping", "I want to live healthier", "my knee hurts", "where are the programs"];
+
+test("guide AI: every crisis phrase is caught and never sent, with the apostrophe a phone types too; figures of speech are not crisis words", async (t) => {
+  const m = await model(() => ({ content: '{"say":"Sorry it hurts. Start with the pain tool.","places":["pain"],"area":"back"}' })); t.after(m.close);
+  const ai = createGuideAI({ cfg: { scribe: { url: m.url, key: "k_made_up", model: "small-one" } }, logger: quiet });
+  for (const text of CRISIS) {
+    assert.equal(ai.urgent(text), true, text);
+    assert.equal(ai.urgent(text.toUpperCase()), true, text.toUpperCase());
+    assert.deepEqual(await ai.understand({ text, places: PLACES }), { error: "urgent" }, text);
+  }
+  assert.equal(m.seen.length, 0, "not one of them reached the model");
+  for (const text of NOT_CRISIS) assert.equal(ai.urgent(text), false, text);
+  // and a figure of speech is answered by the model like any other sentence
+  assert.equal(core(await ai.understand({ text: "my back is killing me", places: PLACES })).say, "Sorry it hurts. Start with the pain tool.");
+  assert.equal(m.seen.length, 1); assert.match(m.seen[0].body.messages[1].content, /my back is killing me/);
+});
+
+test("guide AI: the model is asked whether a message is outside Solomon's subject, and its answer is read strictly", () => {
+  const cat = { programs: [], videos: [], guides: [] };
+  assert.equal(read(JSON.stringify({ say: "Not my lane, but I can find you a program.", outside: true }), [], cat).outside, true);
+  for (const v of ["true", "yes", 1, null, {}, [true]]) assert.equal(read(JSON.stringify({ say: "Ok.", outside: v }), [], cat).outside, false, JSON.stringify(v));
+  assert.equal(read('{"say":"Ok."}', [], cat).outside, false, "left out is false");
+  const sys = system([{ id: "pain", label: "Open the pain tool" }]);
+  assert.match(sys, /"verse": boolean, "outside": boolean\}/, "the flag is part of the reply the model is asked for");
+  assert.match(sys, /plainly outside all of this [^\n]*: set outside to true,/); assert.match(sys, /Otherwise outside is false\./);
+  assert.match(sys, /without the words "I can only help with"/, "the wording rule is unchanged");
 });
