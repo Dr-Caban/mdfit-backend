@@ -808,10 +808,13 @@ test("10. a subscription's life is kept: a plan changed in the portal, a failed 
   assert.equal(m().cancelAtPeriodEnd, true); assert.equal(m().canceledAt, "2026-11-10T14:00:00.000Z");
   assert.equal((await s.call("GET", "/api/admin/economics", undefined, owner)).body.members.canceling, 1);
   // It ends: kept in the history, then taken off
-  await s.hook("customer.subscription.deleted", sub("canceled", "accountability"));
+  // (Stripe's end time is 9pm in Sarasota on 5 December, past midnight UTC; the event carries no canceled_at)
+  await s.hook("customer.subscription.deleted", sub("canceled", "accountability", { ended_at: unix("2026-12-06T02:00:00Z") }));
   const mia = s.client("mia.member@example.com");
   assert.equal(mia.membership, null);
   assert.deepEqual(mia.membershipHistory.map((h) => [h.tier, h.since, h.status, h.subscriptionId]), [["accountability", "2026-10-05", "canceled", "sub_m"]]);
+  assert.equal(mia.membershipHistory[0].endedAt, "2026-12-05", "the clinic's day Stripe ended it, not the day the event was handled");
+  assert.equal(mia.membershipHistory[0].canceledAt, "2026-11-10T14:00:00.000Z", "the cancellation already written down is kept");
   const kinds = s.readJson("activity").map((e) => e.type).filter((x) => x.startsWith("subscription_")).reverse(); // (the feed is newest first)
   assert.deepEqual(kinds, ["subscription_started", "subscription_changed", "subscription_payment_failed", "subscription_ended"]);
 

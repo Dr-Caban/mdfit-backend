@@ -15,6 +15,8 @@ logger.level = 99;
 
 async function start() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdfit-refund-"));
+  // The app's timers (the staff-session save, the email retries) can write here after close(): removed again at exit
+  process.once("exit", () => fs.rmSync(dataDir, { recursive: true, force: true }));
   const made = [], refunds = [], mail = [], sessions = new Map();
   let refundCreate = null; // a test can make Stripe answer differently for one call
   // one charge per checkout; "cus_other" owns ch_other
