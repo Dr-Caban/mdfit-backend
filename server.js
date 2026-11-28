@@ -1615,7 +1615,7 @@ MD Fit · Sarasota, FL${biz && biz.phone ? ` · ${biz.phone}` : ""}`);
     } catch (err) { logger.warn("push_nudge_failed", { error: err.message }); }
   });
   mountContent({ app, admin, store, notify, activity, ...cl });
-  mountMessages({ app, admin, store, notify, activity, cfg, limiter, ...cl });
+  mountMessages({ app, admin, store, notify, activity, cfg, limiter, audit, settings, ...cl });
   require("./lib/board").mountBoard({ app, store, cfg, limiter, logger }); // private two-person notes board behind BOARD_PASSCODE
   require("./lib/valuation").mountValuation({ app, cfg, limiter, logger }); // the valuation workbench behind VALUATION_PASSCODE (or BOARD_PASSCODE)
   mountIntake({ app, admin, me: cl.me, store, cfg, notify, activity, limiter, audit, appointments, tokenMatches, prettyDate, prettyTime });
@@ -1813,6 +1813,7 @@ if (require.main === module) {
   setInterval(() => app.get("nudge")(), 60 * 1000).unref();        // achievements, streak nudge and class reminders
   setInterval(() => { try { app.get("birthdays")(); } catch (err) { logger.warn("birthday_greeting_failed", { error: err.message }); } }, 60 * 1000).unref(); // happy birthday, once a year
   setInterval(() => app.get("guideRemind")(), 60 * 1000).unref();  // reminders a member asked the guide to save
+  setTimeout(() => { try { app.get("resumeBroadcasts")(); } catch (err) { logger.warn("broadcast_email_resume_failed", { error: err.message }); } }, 20 * 1000).unref(); // an email broadcast a restart cut short
   server.listen(port, () => logger.info("listening", { port, dataDir: cfg.dataDir, tz: cfg.tz, origins: cfg.origins, email: Boolean(cfg.resendKey && cfg.notifyFrom) }));
 }
 
